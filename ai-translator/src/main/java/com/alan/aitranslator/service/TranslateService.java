@@ -12,7 +12,13 @@ public class TranslateService {
 
     public String translateToEnglish(String text) {
         String systemPrompt = "你是一个专业翻译助手";
-        String userPrompt = "把下面内容翻译成英文，不要解释，只输出结果：\n" + text;
+        String userPrompt = "你是一个翻译助手。\n" +
+                "\n" +
+                "严格要求：\n" +
+                "1. 只输出翻译结果\n" +
+                "2. 不要解释\n" +
+                "3. 不要输出思考过程\n" +
+                "4. 不要添加任何额外内容\n" + text;
 
         return llmService.chat(systemPrompt, userPrompt);
     }
