@@ -10,15 +10,22 @@ public class TranslateService {
     @Autowired
     private LlmService llmService;
 
-    public String translateToEnglish(String text) {
-        String systemPrompt = "你是一个专业翻译助手";
-        String userPrompt = "你是一个翻译助手。\n" +
-                "\n" +
-                "严格要求：\n" +
-                "1. 只输出翻译结果\n" +
-                "2. 不要解释\n" +
-                "3. 不要输出思考过程\n" +
-                "4. 不要添加任何额外内容\n" + text;
+    public String translate(String text, String from, String to) {
+
+        String systemPrompt = """
+        你是一个翻译引擎。
+
+        规则：
+        - 只输出翻译结果
+        - 不解释
+        - 不扩展
+        - 输出必须完整
+        """;
+
+        String userPrompt = String.format(
+                "将以下内容从 %s 翻译为 %s：\n%s",
+                from, to, text
+        );
 
         return llmService.chat(systemPrompt, userPrompt);
     }
