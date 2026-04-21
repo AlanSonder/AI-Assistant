@@ -5,4 +5,5 @@ package com.alan.aiagent;
  */
 public class AgentModuleInfo {
     // Placeholder class to ensure directory is tracked by Git
+    private Integer num;
 }
