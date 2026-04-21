@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: ai-assistant
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ai_assistant
+    username: postgres
+    password: 123456
+    driver-class-name: org.postgresql.Driver
+
+  ai:
+    openai:
+      api-key: sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t
+
+server:
+  port: 9090
