@@ -3,8 +3,10 @@ package com.alan.aiassistant;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.retry.annotation.EnableRetry;
 
 @SpringBootApplication
+@EnableRetry
 @ComponentScan(basePackages = {"com.alan.aiassistant", "com.alan.aicommon", "com.alan.aitranslator", "com.alan.aillm", "com.alan.aiocr", "com.alan.aiagent"})
 public class AiAssistantApplication {
 

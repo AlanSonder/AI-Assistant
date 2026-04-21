@@ -6,10 +6,25 @@ spring:
     username: postgres
     password: 123456
     driver-class-name: org.postgresql.Driver
-
   ai:
     openai:
       api-key: sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t
+      base-url: http://localhost:1234/v1
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+ai:
+  llm:
+    base-url: http://localhost:1234/v1
+    model: qwen
+    api-key: sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t
+    timeout: 60000
+    max-retries: 3
+    temperature: 0.3
+    top-p: 0.9
+    max-tokens: 4096
 
 server:
   port: 9090
