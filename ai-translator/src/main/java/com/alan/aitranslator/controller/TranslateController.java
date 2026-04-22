@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
-@RequestMapping("/translate")
+@RequestMapping("/api/v1/translate")
 public class TranslateController {
 
     @Autowired
@@ -27,8 +27,8 @@ public class TranslateController {
     @Autowired
     private AudioTranslateService audioTranslateService;
 
-    @PostMapping
-    public ApiResponse<TranslateResponse> translate(@Valid @RequestBody TranslateRequest request) {
+    @PostMapping("/text")
+    public ApiResponse<TranslateResponse> translateText(@Valid @RequestBody TranslateRequest request) {
         TranslateResponse response = translateService.translate(request);
         return ApiResponse.success(response);
     }

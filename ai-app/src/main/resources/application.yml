@@ -8,7 +8,7 @@ spring:
     driver-class-name: org.postgresql.Driver
   ai:
     openai:
-      api-key: sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t
+      api-key: ${OPENAI_API_KEY:sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t}
       base-url: http://localhost:1234/v1
   servlet:
     multipart:
@@ -17,14 +17,22 @@ spring:
 
 ai:
   llm:
-    base-url: http://localhost:1234/v1
-    model: qwen
-    api-key: sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t
-    timeout: 60000
-    max-retries: 3
-    temperature: 0.3
-    top-p: 0.9
-    max-tokens: 4096
+    base-url: ${LLM_BASE_URL:http://localhost:1234/v1}
+    model: ${LLM_MODEL:qwen}
+    api-key: ${LLM_API_KEY:sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t}
+    timeout: ${LLM_TIMEOUT:60000}
+    max-retries: ${LLM_MAX_RETRIES:3}
+    temperature: ${LLM_TEMPERATURE:0.3}
+    topP: ${LLM_TOP_P:0.9}
+    max-tokens: ${LLM_MAX_TOKENS:4096}
+  translator:
+    max-text-length: 10000
+    max-segment-length: 3000
+    enable-cache: true
+    cache-size: 10000
+    cache-ttl-minutes: 1440
+    default-domain: general
+    default-style: neutral
 
 server:
   port: 9090
