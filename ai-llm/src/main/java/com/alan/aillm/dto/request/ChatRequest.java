@@ -39,4 +39,50 @@ public class ChatRequest {
             return msg;
         }
     }
+
+    @Data
+    public static class VisionMessage {
+        private String role;
+        private List<Content> content;
+
+        public static VisionMessage userWithImage(String text, String base64Image) {
+            VisionMessage msg = new VisionMessage();
+            msg.setRole("user");
+            msg.setContent(List.of(
+                    Content.text(text),
+                    Content.image(base64Image)
+            ));
+            return msg;
+        }
+    }
+
+    @Data
+    public static class Content {
+        private String type;
+        private String text;
+        private ImageUrl imageUrl;
+
+        public static Content text(String text) {
+            Content c = new Content();
+            c.setType("text");
+            c.setText(text);
+            return c;
+        }
+
+        public static Content image(String base64Data) {
+            Content c = new Content();
+            c.setType("image_url");
+            c.setImageUrl(new ImageUrl("data:image/jpeg;base64," + base64Data));
+            return c;
+        }
+    }
+
+    @Data
+    public static class ImageUrl {
+        private String url;
+
+        public ImageUrl(String url) {
+            this.url = url;
+        }
+    }
 }

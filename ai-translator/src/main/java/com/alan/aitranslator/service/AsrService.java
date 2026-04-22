@@ -38,19 +38,24 @@ public class AsrService {
         String url = asrApiUrl;
 
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-
-        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("file", createFileSystemResource(audioFile));
-        body.add("model", "whisper-1");
-        if (language != null && !language.isEmpty()) {
-            body.add("language", language);
-        }
-        body.add("response_format", "text");
-
-        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+        headers.setContentType(MediaType.APPLICATION_JSON);
 
         try {
+            // 读取文件并进行base64编码
+            byte[] fileContent = Files.readAllBytes(audioFile.toPath());
+            String base64Audio = Base64.getEncoder().encodeToString(fileContent);
+
+            // 构建JSON请求体
+            Map<String, Object> body = new java.util.HashMap<>();
+            body.put("file", base64Audio);
+            body.put("model", "whisper-1");
+            if (language != null && !language.isEmpty()) {
+                body.put("language", language);
+            }
+            body.put("response_format", "text");
+
+            HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
             ResponseEntity<String> response = restTemplate.postForEntity(url, requestEntity, String.class);
 
             if (response.getBody() == null || response.getBody().trim().isEmpty()) {
@@ -63,6 +68,9 @@ public class AsrService {
         } catch (RestClientException e) {
             log.error("语音识别API调用失败: {}", e.getMessage());
             throw new AsrException("语音识别服务不可用: " + e.getMessage());
+        } catch (IOException e) {
+            log.error("读取音频文件失败: {}", e.getMessage());
+            throw new AsrException("读取音频文件失败: " + e.getMessage());
         }
     }
 
