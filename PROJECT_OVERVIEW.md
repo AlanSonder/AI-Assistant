@@ -35,7 +35,7 @@
 │ • WebClient  │ • OpenAI API │ • Tesseract  │ • 文本翻译    │
 │ • 全局异常处理│ • 对话服务   │ • 图片文字提取│ • 图片翻译    │
 │ • 统一响应体 │ • 重试机制   │              │ • 语音翻译    │
-│              │              │              │ • 缓存机制    │
+│              │ • 配置外部化 │              │ • 缓存机制    │
 └──────────────┴──────────────┴──────────────┴──────────────┘
            ▲
 ┌──────────┴──────────────────────────────────────────────────┐
@@ -126,9 +126,23 @@
 | `timeout` | 30000ms | 连接/读取超时 |
 | `max-retries` | 3 | 最大重试次数 |
 | `temperature` | 0.3 | 采样温度 |
-| `top-p` | 0.9 | 核采样参数 |
+| `topP` | 0.9 | 核采样参数（YAML 中使用 `topP`） |
 | `max-tokens` | 4096 | 最大生成令牌数 |
 | `stream` | false | 是否流式输出 |
+
+**配置示例**（支持环境变量覆盖）：
+```yaml
+ai:
+  llm:
+    base-url: ${LLM_BASE_URL:http://localhost:1234/v1}
+    model: ${LLM_MODEL:qwen}
+    api-key: ${LLM_API_KEY:your-api-key}
+    timeout: ${LLM_TIMEOUT:60000}
+    max-retries: ${LLM_MAX_RETRIES:3}
+    temperature: ${LLM_TEMPERATURE:0.3}
+    topP: ${LLM_TOP_P:0.9}
+    max-tokens: ${LLM_MAX_TOKENS:4096}
+```
 
 #### 3.2.2 对话服务（LlmService）
 
@@ -147,7 +161,7 @@
 - 响应内容安全校验（空响应、空 choices、空内容检查）
 
 **请求/响应 DTO**:
-- `ChatRequest`: 兼容 OpenAI Chat Completions API 的请求体
+- `ChatRequest`: 兼容 OpenAI Chat Completions API 的请求体（含 temperature/topP/maxTokens/stream）
 - `ChatResponse`: 解析 OpenAI 标准响应格式（含 choices/usage/delta 等字段）
 
 ---
@@ -179,6 +193,8 @@
 
 #### 3.4.1 配置类（TranslatorConfig）
 
+通过 `@ConfigurationProperties(prefix = "ai.translator")` 绑定配置：
+
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `max-text-length` | 10000 | 最大翻译文本长度 |
@@ -188,6 +204,19 @@
 | `cache-ttl-minutes` | 1440 | 缓存过期时间（24小时） |
 | `default-domain` | general | 默认翻译领域 |
 | `default-style` | neutral | 默认翻译风格 |
+
+**配置示例**：
+```yaml
+ai:
+  translator:
+    max-text-length: 10000
+    max-segment-length: 3000
+    enable-cache: true
+    cache-size: 10000
+    cache-ttl-minutes: 1440
+    default-domain: general
+    default-style: neutral
+```
 
 #### 3.4.2 翻译服务（TranslateService）
 
@@ -223,7 +252,7 @@
 
 **流程**: 图片上传 → OCR 文字提取 → 文本翻译 → 返回结果
 
-**接口**: `POST /translate/image` (multipart/form-data)
+**接口**: `POST /api/v1/translate/image` (multipart/form-data)
 
 **参数**:
 - `file` - 图片文件（JPG/PNG/GIF/WEBP，最大 50MB）
@@ -234,7 +263,7 @@
 
 **流程**: 音频上传 → ASR 语音识别 → 文本翻译 → 返回结果
 
-**接口**: `POST /translate/audio` (multipart/form-data)
+**接口**: `POST /api/v1/translate/audio` (multipart/form-data)
 
 **参数**:
 - `file` - 音频文件（MP3/WAV/M4A/OGG/FLAC，最大 50MB）
@@ -307,12 +336,31 @@ spring:
     password: 123456
   ai:
     openai:
-      api-key: sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t
+      api-key: ${OPENAI_API_KEY:sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t}
       base-url: http://localhost:1234/v1
   servlet:
     multipart:
       max-file-size: 50MB
       max-request-size: 50MB
+
+ai:
+  llm:
+    base-url: ${LLM_BASE_URL:http://localhost:1234/v1}
+    model: ${LLM_MODEL:qwen}
+    api-key: ${LLM_API_KEY:sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t}
+    timeout: ${LLM_TIMEOUT:60000}
+    max-retries: ${LLM_MAX_RETRIES:3}
+    temperature: ${LLM_TEMPERATURE:0.3}
+    topP: ${LLM_TOP_P:0.9}
+    max-tokens: ${LLM_MAX_TOKENS:4096}
+  translator:
+    max-text-length: 10000
+    max-segment-length: 3000
+    enable-cache: true
+    cache-size: 10000
+    cache-ttl-minutes: 1440
+    default-domain: general
+    default-style: neutral
 
 server:
   port: 9090
@@ -323,17 +371,22 @@ server:
 - **LLM 服务**: 本地 LM Studio（端口 1234）
 - **文件上传**: 最大 50MB
 
+**安全配置说明**:
+- 所有敏感配置（API Key、密码）支持通过环境变量覆盖
+- 格式：`${ENV_VAR:default_value}`，环境变量不存在时使用默认值
+- 生产环境建议设置对应的环境变量，避免使用默认值
+
 ---
 
 ## 四、API 接口清单
 
-### 4.1 翻译接口
+### 4.1 翻译接口（v1 版本）
 
 | 方法 | 路径 | 说明 | 请求类型 |
 |------|------|------|----------|
-| POST | `/translate` | 文本翻译 | JSON |
-| POST | `/translate/image` | 图片翻译 | Multipart |
-| POST | `/translate/audio` | 语音翻译 | Multipart |
+| POST | `/api/v1/translate/text` | 文本翻译 | JSON |
+| POST | `/api/v1/translate/image` | 图片翻译 | Multipart |
+| POST | `/api/v1/translate/audio` | 语音翻译 | Multipart |
 
 ### 4.2 请求/响应示例
 
@@ -346,7 +399,8 @@ server:
   "from": "en",
   "to": "zh",
   "domain": "general",
-  "style": "neutral"
+  "style": "neutral",
+  "contextText": "可选的上下文内容"
 }
 ```
 
@@ -365,6 +419,64 @@ server:
     "durationMs": 1250,
     "cached": false
   },
+  "timestamp": 1713763200000
+}
+```
+
+#### 图片翻译
+
+**请求** (multipart/form-data):
+- `file` - 图片文件
+- `from` - 源语言代码
+- `to` - 目标语言代码
+
+**响应**:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "extractedText": "图片中提取的原文",
+    "translatedText": "翻译后的文本",
+    "from": "en",
+    "to": "zh",
+    "durationMs": 3250
+  },
+  "timestamp": 1713763200000
+}
+```
+
+#### 语音翻译
+
+**请求** (multipart/form-data):
+- `file` - 音频文件
+- `from` - 源语言代码
+- `to` - 目标语言代码
+
+**响应**:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "recognizedText": "语音识别结果",
+    "translatedText": "翻译后的文本",
+    "from": "en",
+    "to": "zh",
+    "durationMs": 5250,
+    "audioDurationMs": 15000
+  },
+  "timestamp": 1713763200000
+}
+```
+
+### 4.3 错误响应示例
+
+```json
+{
+  "code": 400,
+  "message": "参数验证失败: 翻译文本不能为空; 源语言不能为空",
+  "data": null,
   "timestamp": 1713763200000
 }
 ```
@@ -419,6 +531,7 @@ server:
 ┌─────────────┐
 │ TranslateController │
 │  @Valid 参数校验     │
+│  路径: /api/v1/translate/text │
 └──────┬──────┘
        │
        ▼
@@ -427,6 +540,7 @@ server:
 │ • 文本预处理      │
 │ • 缓存查询        │
 │ • 长文本分段      │
+│ • 领域/风格适配   │
 └──────┬──────┘
        │
        ▼
@@ -454,6 +568,7 @@ server:
 ┌─────────────┐
 │ ImageTranslateService │
 │ • 图片格式/大小校验    │
+│  路径: /api/v1/translate/image │
 └──────┬──────┘
        │
        ▼
@@ -485,6 +600,7 @@ server:
 │ • 音频格式/大小校验    │
 │ • 创建临时文件         │
 │ • 计算音频时长         │
+│  路径: /api/v1/translate/audio │
 └──────┬──────┘
        │
        ▼
@@ -536,6 +652,24 @@ server:
 | LM Studio | - | 本地 LLM 服务，端口 1234 |
 | Tesseract | - | OCR 引擎（需安装语言包） |
 
+### 7.4 环境变量配置（生产环境推荐）
+
+```bash
+# LLM 配置
+export LLM_BASE_URL=http://localhost:1234/v1
+export LLM_MODEL=qwen
+export LLM_API_KEY=your-secure-api-key
+export LLM_TIMEOUT=60000
+
+# OpenAI 配置（Spring AI 使用）
+export OPENAI_API_KEY=your-secure-api-key
+
+# 数据库配置
+export DB_URL=jdbc:postgresql://localhost:5432/ai_assistant
+export DB_USERNAME=postgres
+export DB_PASSWORD=your-secure-password
+```
+
 ---
 
 ## 八、扩展性分析
@@ -551,7 +685,7 @@ server:
 
 1. **模块化设计**: 各模块职责清晰，可独立演进
 2. **依赖倒置**: `ai-app` 作为组装模块，业务模块之间通过接口解耦
-3. **配置外部化**: 所有 AI 参数通过 `application.yml` 配置，无需改代码
+3. **配置外部化**: 所有 AI 参数通过 `application.yml` 配置，支持环境变量覆盖，无需改代码
 4. **异常隔离**: 各模块自定义异常，避免错误传播污染
 
 ### 8.3 待完善方向
@@ -562,6 +696,8 @@ server:
 4. **多模态支持**: 可扩展视频翻译、文档翻译等能力
 5. **用户管理**: 当前无认证授权机制
 6. **限流熔断**: 建议引入 Sentinel/Resilience4j
+7. **单元测试**: 当前测试覆盖不足，需补充 Service/Controller 层测试
+8. **API 文档**: 建议引入 Swagger/OpenAPI 自动生成接口文档
 
 ---
 
@@ -576,11 +712,12 @@ server:
 - ✅ 缓存机制提升性能
 - ✅ 重试机制增强稳定性
 - ✅ 临时文件自动清理，避免磁盘泄漏
+- ✅ 配置外部化，支持环境变量注入
+- ✅ 敏感配置默认支持环境变量覆盖
 
 ### 9.2 改进建议
 
-- ⚠️ `application.yml` 中数据库密码明文存储，建议使用环境变量或配置中心
-- ⚠️ API Key 明文存储，存在安全风险
+- ⚠️ `application.yml` 中数据库密码仍有默认值，生产环境务必通过环境变量覆盖
 - ⚠️ `AsrService` 中 ASR API URL 硬编码，建议提取到配置
 - ⚠️ `OcrService` 中 Tesseract 数据路径未配置，可能依赖系统环境
 - ⚠️ 缺少单元测试覆盖（仅有一个默认的 `AiAssistantApplicationTests`）
@@ -588,7 +725,27 @@ server:
 
 ---
 
-## 十、总结
+## 十、版本变更记录
+
+### v0.0.1-SNAPSHOT (当前版本)
+
+**新增功能**:
+- 多模态翻译支持（文本/图片/语音）
+- 翻译缓存机制（Caffeine）
+- 长文本自动分段翻译
+- 领域和风格适配（tech/medical/legal/business/literary/formal/casual/academic）
+- 全局异常处理与统一响应格式
+- Spring Retry 重试机制
+- 配置外部化（支持环境变量）
+
+**架构变更**:
+- 清理重复模块（app、translator）
+- API 路径规范化（`/api/v1/translate/*`）
+- 模块依赖关系优化
+
+---
+
+## 十一、总结
 
 AI-Assistant 是一个架构清晰、模块化的 Spring Boot AI 应用，通过 Maven 多模块方式组织了 LLM、OCR、翻译等核心能力。项目采用**本地化 LLM 方案**（LM Studio），降低了对外部云服务的依赖，适合私有化部署场景。
 
@@ -597,5 +754,6 @@ AI-Assistant 是一个架构清晰、模块化的 Spring Boot AI 应用，通过
 2. **Prompt 工程**: 通过精细的系统提示词控制翻译质量
 3. **多模态翻译**: 文本/图片/语音三种输入方式的统一翻译能力
 4. **性能优化**: Caffeine 缓存 + 长文本分段处理
+5. **配置安全**: 敏感配置支持环境变量覆盖
 
 项目当前处于 **MVP 阶段**，核心功能已可用，后续可在智能体框架、向量检索、流式输出等方向持续演进。
