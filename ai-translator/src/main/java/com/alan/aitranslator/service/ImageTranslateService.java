@@ -31,7 +31,7 @@ public class ImageTranslateService {
     private TranslatorConfig translatorConfig;
 
     /**
-     * 图片翻译 - 主要使用Vision LLM方案，OCR作为备用
+     * 图片翻译 - 仅使用Vision LLM方案，不回退到OCR
      */
     public ImageTranslateResponse translateImage(MultipartFile imageFile, String from, String to) {
         long startTime = System.currentTimeMillis();
@@ -43,10 +43,15 @@ public class ImageTranslateService {
         try {
             // 主方案：直接发送Base64图片到LLM进行识别和翻译
             byte[] imageBytes = imageFile.getBytes();
+            log.info("图片读取成功，大小: {} bytes", imageBytes.length);
+            
             String domain = translatorConfig.getDefaultDomain();
             String style = translatorConfig.getDefaultStyle();
+            log.info("使用配置: domain={}, style={}", domain, style);
 
+            log.info("开始调用Vision LLM服务...");
             String translatedText = visionLlmService.translateImage(imageBytes, from, to, domain, style);
+            log.info("Vision LLM返回结果: 长度={}", translatedText != null ? translatedText.length() : 0);
 
             if (translatedText == null || translatedText.trim().isEmpty()) {
                 throw new TranslationException("图片翻译结果为空");
@@ -63,15 +68,12 @@ public class ImageTranslateService {
                     .durationMs(duration)
                     .build();
 
-        } catch (TranslationException e) {
-            log.error("Vision LLM图片翻译失败，尝试OCR备用方案", e);
-            return translateImageWithOcr(imageFile, from, to, startTime);
         } catch (IOException e) {
             log.error("读取图片文件失败", e);
             throw new TranslationException("读取图片文件失败: " + e.getMessage());
         } catch (Exception e) {
-            log.error("图片翻译异常，尝试OCR备用方案", e);
-            return translateImageWithOcr(imageFile, from, to, startTime);
+            log.error("Vision LLM图片翻译失败", e);
+            throw new TranslationException("Vision LLM图片翻译失败: " + e.getMessage(), e);
         }
     }
 
