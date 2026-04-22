@@ -47,7 +47,12 @@ public class VisionLlmService {
      * 图片识别与翻译 - 直接发送Base64图片到LLM
      */
     public String translateImage(byte[] imageBytes, String from, String to, String domain, String style) {
+        log.info("开始图片翻译: from={}, to={}, domain={}, style={}, imageSize={} bytes", 
+                from, to, domain, style, imageBytes.length);
+        
         String base64Image = Base64.getEncoder().encodeToString(imageBytes);
+        log.info("图片Base64编码成功，长度: {} chars", base64Image.length());
+        
         return translateImageBase64(base64Image, from, to, domain, style);
     }
 
@@ -58,6 +63,7 @@ public class VisionLlmService {
         String systemPrompt = buildImageTranslatePrompt(from, to, domain, style);
         String userText = "请识别图片中的文字并将其翻译为目标语言。只输出翻译结果，不要添加任何解释。";
 
+        log.info("构建Vision LLM请求...");
         List<Object> messages = List.of(
                 ChatRequest.Message.system(systemPrompt),
                 ChatRequest.VisionMessage.userWithImage(userText, base64Image)
@@ -89,11 +95,13 @@ public class VisionLlmService {
     )
     private String callVisionApi(List<Object> messages) {
         String url = llmConfig.getBaseUrl() + "/chat/completions";
+        log.info("调用Vision LLM API: {}", url);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         if (llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty()) {
             headers.set("Authorization", "Bearer " + llmConfig.getApiKey());
+            log.info("使用API Key进行认证");
         }
 
         Map<String, Object> requestBody = new java.util.HashMap<>();
@@ -103,30 +111,43 @@ public class VisionLlmService {
         requestBody.put("top_p", llmConfig.getTopP());
         requestBody.put("max_tokens", llmConfig.getMaxTokens());
 
+        log.info("请求体构建完成: model={}, messages.size={}", 
+                llmConfig.getModel(), messages.size());
+
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
         long startTime = System.currentTimeMillis();
         try {
+            log.info("发送Vision LLM请求...");
             ResponseEntity<ChatResponse> response =
                     restTemplate.postForEntity(url, entity, ChatResponse.class);
 
             long duration = System.currentTimeMillis() - startTime;
-            log.info("Vision LLM响应成功: duration={}ms, model={}", duration, llmConfig.getModel());
+            log.info("Vision LLM响应成功: status={}, duration={}ms", 
+                    response.getStatusCode(), duration);
 
             if (response.getBody() == null) {
+                log.error("LLM返回响应体为空");
                 throw new LlmException("LLM返回响应体为空");
             }
+
+            log.info("LLM响应体: choices.size={}", 
+                    response.getBody().getChoices() != null ? response.getBody().getChoices().size() : 0);
 
             return extractContent(response.getBody());
         } catch (ResourceAccessException e) {
             log.error("Vision LLM连接异常: url={}, error={}", url, e.getMessage());
             throw new LlmException("LLM服务连接失败，请检查LM Studio是否启动", e);
         } catch (HttpServerErrorException e) {
-            log.error("Vision LLM服务器错误: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
-            throw new LlmException("LLM服务内部错误: " + e.getStatusCode(), e);
+            String body = e.getResponseBodyAsString();
+            log.error("Vision LLM服务器错误: status={}, body={}", e.getStatusCode(), body);
+            throw new LlmException("LLM服务内部错误: " + e.getStatusCode() + ", " + body, e);
         } catch (RestClientException e) {
             log.error("Vision LLM调用失败: error={}", e.getMessage(), e);
             throw new LlmException("LLM调用失败: " + e.getMessage(), e);
+        } catch (Exception e) {
+            log.error("Vision LLM处理异常", e);
+            throw new LlmException("LLM处理异常: " + e.getMessage(), e);
         }
     }
 
@@ -145,6 +166,7 @@ public class VisionLlmService {
             throw new LlmException("LLM返回消息内容为空字符串");
         }
 
+        log.info("提取内容成功: 长度={}", content.length());
         return content.trim();
     }
 
