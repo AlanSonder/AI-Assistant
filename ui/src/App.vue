@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { DocumentCopy, Delete, MagicStick } from '@element-plus/icons-vue'
+import { DocumentCopy, Delete, MagicStick, CircleCheck, UploadFilled } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 // ==================== 类型定义 ====================
@@ -31,23 +31,6 @@ interface TranslateResult {
   style: string
   durationMs: number
   cached: boolean
-}
-
-interface ImageTranslateResult {
-  extractedText: string
-  translatedText: string
-  from: string
-  to: string
-  durationMs: number
-}
-
-interface AudioTranslateResult {
-  recognizedText: string
-  translatedText: string
-  from: string
-  to: string
-  durationMs: number
-  audioDurationMs: number
 }
 
 // ==================== 常量 ====================
@@ -88,6 +71,12 @@ const resultText = ref('')
 const loading = ref(false)
 const duration = ref(0)
 const isCached = ref(false)
+const isStreaming = ref(false)
+
+// 流式输出相关
+const streamText = ref('')
+const streamLoading = ref(false)
+const streamAbortController = ref<AbortController | null>(null)
 
 // 文件上传相关
 const imageFile = ref<File | null>(null)
@@ -104,39 +93,110 @@ const api = axios.create({
 })
 
 /**
- * 文本翻译
+ * 文本翻译（非流式）
  */
 async function translateTextApi(params: TranslateRequest): Promise<ApiResponse<TranslateResult>> {
   const { data } = await api.post<ApiResponse<TranslateResult>>('/translate/text', params)
   return data
 }
 
+// ==================== 流式翻译 ====================
+
 /**
- * 图片翻译
+ * 流式文本翻译 - 使用 EventSource
  */
-async function translateImageApi(file: File, from: string, to: string): Promise<ApiResponse<ImageTranslateResult>> {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('from', from)
-  formData.append('to', to)
-  const { data } = await api.post<ApiResponse<ImageTranslateResult>>('/translate/image', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+function translateStream(request: TranslateRequest) {
+  streamAbortController.value = new AbortController()
+  streamLoading.value = true
+  streamText.value = ''
+  isStreaming.value = true
+
+  fetch('/api/v1/translate/stream/text', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    },
+    body: JSON.stringify(request),
+    signal: streamAbortController.value.signal,
   })
-  return data
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error('无法读取响应流')
+      }
+
+      function readStream(): Promise<void> {
+        return reader.read().then(({ done, value }) => {
+          if (done) {
+            streamLoading.value = false
+            isStreaming.value = false
+            ElMessage.success('流式翻译完成')
+            return
+          }
+
+          const chunk = decoder.decode(value, { stream: true })
+          const lines = chunk.split('\n')
+
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              const eventName = line.substring(6).trim()
+              // 读取下一行 data:
+              continue
+            }
+            if (line.startsWith('data:')) {
+              const data = line.substring(5).trim()
+              try {
+                const parsed = JSON.parse(data)
+                if (parsed.content) {
+                  streamText.value += parsed.content
+                }
+                if (parsed.finish) {
+                  streamLoading.value = false
+                  isStreaming.value = false
+                }
+                if (parsed.error) {
+                  ElMessage.error(parsed.error)
+                  streamLoading.value = false
+                  isStreaming.value = false
+                }
+              } catch (e) {
+                // 忽略非JSON数据
+              }
+            }
+          }
+
+          return readStream()
+        })
+      }
+
+      return readStream()
+    })
+    .catch((error) => {
+      if (error.name === 'AbortError') {
+        ElMessage.info('翻译已取消')
+      } else {
+        console.error('流式翻译错误:', error)
+        ElMessage.error('流式翻译失败: ' + error.message)
+      }
+      streamLoading.value = false
+      isStreaming.value = false
+    })
 }
 
 /**
- * 语音翻译
+ * 取消流式翻译
  */
-async function translateAudioApi(file: File, from: string, to: string): Promise<ApiResponse<AudioTranslateResult>> {
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('from', from)
-  formData.append('to', to)
-  const { data } = await api.post<ApiResponse<AudioTranslateResult>>('/translate/audio', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  return data
+function cancelStream() {
+  if (streamAbortController.value) {
+    streamAbortController.value.abort()
+    streamAbortController.value = null
+  }
 }
 
 // ==================== 事件处理 ====================
@@ -164,6 +224,7 @@ async function handleTranslate() {
 
   loading.value = true
   resultText.value = ''
+  streamText.value = ''
   extractedText.value = ''
   recognizedText.value = ''
   duration.value = 0
@@ -173,41 +234,49 @@ async function handleTranslate() {
     const from = fromLang.value === 'auto' ? 'auto' : fromLang.value
 
     if (activeTab.value === 'text') {
-      const res = await translateTextApi({
+      // 使用流式翻译
+      const request: TranslateRequest = {
         text: inputText.value,
         from,
         to: toLang.value,
         domain: domain.value,
         style: style.value,
-      })
-
-      if (res.code === 200) {
-        resultText.value = res.data.translatedText
-        duration.value = res.data.durationMs
-        isCached.value = res.data.cached
-        ElMessage.success(isCached.value ? '翻译完成（来自缓存）' : '翻译完成')
-      } else {
-        ElMessage.error(res.message || '翻译失败')
       }
+      translateStream(request)
+      loading.value = false
     } else if (activeTab.value === 'image') {
-      const res = await translateImageApi(imageFile.value!, from, toLang.value)
-      if (res.code === 200) {
-        extractedText.value = res.data.extractedText
-        resultText.value = res.data.translatedText
-        duration.value = res.data.durationMs
+      // 图片翻译保持非流式
+      const formData = new FormData()
+      formData.append('file', imageFile.value!)
+      formData.append('from', from)
+      formData.append('to', toLang.value)
+      const { data } = await api.post('/translate/image', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      if (data.code === 200) {
+        extractedText.value = data.data.extractedText
+        resultText.value = data.data.translatedText
+        duration.value = data.data.durationMs
         ElMessage.success('图片翻译完成')
       } else {
-        ElMessage.error(res.message || '图片翻译失败')
+        ElMessage.error(data.message || '图片翻译失败')
       }
     } else if (activeTab.value === 'audio') {
-      const res = await translateAudioApi(audioFile.value!, from, toLang.value)
-      if (res.code === 200) {
-        recognizedText.value = res.data.recognizedText
-        resultText.value = res.data.translatedText
-        duration.value = res.data.durationMs
+      // 语音翻译保持非流式
+      const formData = new FormData()
+      formData.append('file', audioFile.value!)
+      formData.append('from', from)
+      formData.append('to', toLang.value)
+      const { data } = await api.post('/translate/audio', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      if (data.code === 200) {
+        recognizedText.value = data.data.recognizedText
+        resultText.value = data.data.translatedText
+        duration.value = data.data.durationMs
         ElMessage.success('语音翻译完成')
       } else {
-        ElMessage.error(res.message || '语音翻译失败')
+        ElMessage.error(data.message || '语音翻译失败')
       }
     }
   } catch (err: any) {
@@ -226,10 +295,17 @@ function handleClear() {
   imageFile.value = null
   audioFile.value = null
   resultText.value = ''
+  streamText.value = ''
   extractedText.value = ''
   recognizedText.value = ''
   duration.value = 0
   isCached.value = false
+  isStreaming.value = false
+  streamLoading.value = false
+  if (streamAbortController.value) {
+    streamAbortController.value.abort()
+    streamAbortController.value = null
+  }
   ElMessage.info('已清空')
 }
 
@@ -237,12 +313,13 @@ function handleClear() {
  * 复制翻译结果
  */
 async function handleCopy() {
-  if (!resultText.value) {
+  const textToCopy = streamText.value || resultText.value
+  if (!textToCopy) {
     ElMessage.warning('没有可复制的内容')
     return
   }
   try {
-    await navigator.clipboard.writeText(resultText.value)
+    await navigator.clipboard.writeText(textToCopy)
     ElMessage.success('已复制到剪贴板')
   } catch {
     ElMessage.error('复制失败')
@@ -309,7 +386,7 @@ function handleAudioChange(file: any) {
             accept="image/*"
             class="upload-area"
           >
-            <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+            <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
             <div class="el-upload__text">
               拖拽图片到此处或 <em>点击上传</em>
             </div>
@@ -331,7 +408,7 @@ function handleAudioChange(file: any) {
             accept="audio/*"
             class="upload-area"
           >
-            <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+            <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
             <div class="el-upload__text">
               拖拽音频到此处或 <em>点击上传</em>
             </div>
@@ -402,11 +479,19 @@ function handleAudioChange(file: any) {
         <el-button
           type="primary"
           size="large"
-          :loading="loading"
+          :loading="loading || streamLoading"
           @click="handleTranslate"
         >
           <el-icon><MagicStick /></el-icon>
-          翻译
+          {{ streamLoading ? '翻译中...' : '翻译' }}
+        </el-button>
+        <el-button
+          v-if="streamLoading"
+          type="danger"
+          size="large"
+          @click="cancelStream"
+        >
+          取消
         </el-button>
         <el-button
           size="large"
@@ -417,16 +502,37 @@ function handleAudioChange(file: any) {
         </el-button>
       </div>
 
-      <!-- 中间结果展示（图片/语音） -->
-      <el-card v-if="extractedText || recognizedText" class="intermediate-card" shadow="hover">
+      <!-- 流式输出结果区 -->
+      <el-card v-if="streamText || isStreaming" class="result-card streaming" shadow="hover">
         <template #header>
-          <span>{{ activeTab === 'image' ? 'OCR 识别结果' : '语音识别结果' }}</span>
+          <div class="result-header">
+            <span>
+              翻译结果
+              <el-tag v-if="isStreaming" type="primary" size="small" effect="light">实时输出中</el-tag>
+            </span>
+            <div class="result-meta">
+              <el-button
+                type="primary"
+                link
+                size="small"
+                @click="handleCopy"
+              >
+                <el-icon><DocumentCopy /></el-icon>
+                复制
+              </el-button>
+            </div>
+          </div>
         </template>
-        <p class="intermediate-text">{{ activeTab === 'image' ? extractedText : recognizedText }}</p>
+        <p class="result-text">{{ streamText }}</p>
+        <div v-if="isStreaming" class="streaming-indicator">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
       </el-card>
 
-      <!-- 翻译结果区 -->
-      <el-card v-if="resultText" class="result-card" shadow="hover">
+      <!-- 非流式结果区（图片/语音） -->
+      <el-card v-if="resultText && !isStreaming" class="result-card" shadow="hover">
         <template #header>
           <div class="result-header">
             <span>翻译结果</span>
@@ -558,22 +664,13 @@ function handleAudioChange(file: any) {
   padding: 8px 0;
 }
 
-.intermediate-card {
-  border-radius: 8px;
-}
-
-.intermediate-text {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.8;
-  color: #606266;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .result-card {
   border-radius: 8px;
   border-left: 4px solid #409EFF;
+}
+
+.result-card.streaming {
+  border-left-color: #67C23A;
 }
 
 .result-card :deep(.el-card__header) {
@@ -602,6 +699,40 @@ function handleAudioChange(file: any) {
   color: #303133;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 流式输出动画指示器 */
+.streaming-indicator {
+  display: flex;
+  gap: 4px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+
+.streaming-indicator .dot {
+  width: 8px;
+  height: 8px;
+  background: #409EFF;
+  border-radius: 50%;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.streaming-indicator .dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.streaming-indicator .dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1);
+  }
 }
 
 /* 响应式适配 */
