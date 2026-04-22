@@ -1,6 +1,5 @@
 package com.alan.aitranslator.service;
 
-import com.alan.aicommon.exception.TranslationException;
 import com.alan.aillm.service.LlmService;
 import com.alan.aitranslator.config.TranslatorConfig;
 import com.alan.aitranslator.dto.request.TranslateRequest;
