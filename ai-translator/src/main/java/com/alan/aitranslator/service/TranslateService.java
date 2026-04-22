@@ -123,33 +123,45 @@ public class TranslateService {
 
         String styleDesc = switch (style.toLowerCase()) {
             case "formal" -> "正式、书面语风格";
-            case "casual" -> "口语化、自然风格";
-            case "academic" -> "学术、严谨风格";
-            default -> "中性风格，保持原文语气";
+            case "casual" -> "口语化、自然地道的风格";
+            case "academic" -> "学术、严谨客观的风格";
+            default -> "中性风格，准确传达原文语气";
         };
 
         return String.format("""
-                你是专业翻译引擎，专注于%s到%s的高质量翻译。
+                你是一个极致高效的本地化翻译引擎。
+                任务：将 <text> 标签内的内容从【%s】翻译为【%s】。
+                
+                背景设定：
+                - 领域：%s
+                - 风格：%s
 
-                领域: %s - %s
-                风格: %s
-
-                规则:
-                1. 只输出翻译结果，不添加任何解释或注释
-                2. 保持原文的格式、换行和标点风格
-                3. 专业术语使用领域标准译法
-                4. 保留专有名词（人名、地名、品牌名）原文
-                5. 代码片段和技术术语不要翻译
-                6. 如遇无法翻译的内容，原样返回
-                7. 输出必须完整，不能截断
-                """, from, to, domain, domainDesc, styleDesc);
+                【最高指令】(必须严格遵守，否则会导致系统崩溃)：
+                1. 绝对静默：只输出最终的翻译结果！绝不允许输出“好的”、“翻译如下”等任何客套话，禁止输出任何解释或思考过程。
+                2. 地道精准：消除“机翻感”，必须符合目标语言的母语表达习惯和文化背景。
+                3. 格式保持：严格保留原文的换行、标点符号风格（全半角）及 Markdown 格式。
+                4. 专业规范：专业术语使用领域标准译法；代码片段、URL、专有名词（人名/地名/品牌名）保持原文。
+                5. 完整兜底：如遇完全无法翻译的内容请原样返回；输出必须完整，严禁截断。
+                """, from, to, domainDesc, styleDesc);
     }
 
     private String buildUserPrompt(String text, String context) {
+        // 使用 XML 标签包裹内容，有效防止本地小模型的“提示词注入(Prompt Injection)”问题
         if (context != null && !context.trim().isEmpty()) {
-            return String.format("参考上下文：\n%s\n\n将以下内容翻译为目标语言：\n%s", context, text);
+            return String.format("""
+                    <context>
+                    %s
+                    </context>
+                    
+                    <text>
+                    %s
+                    </text>""", context.trim(), text.trim());
         }
-        return String.format("翻译以下内容：\n%s", text);
+        
+        return String.format("""
+                <text>
+                %s
+                </text>""", text.trim());
     }
 
     private String buildSegmentContext(List<String> segments, int currentIndex, String globalContext) {
