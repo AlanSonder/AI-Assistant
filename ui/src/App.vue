@@ -94,7 +94,195 @@ async function translateTextApi(params: TranslateRequest): Promise<ApiResponse<T
   return data
 }
 
+/**
+ * 文本翻译（流式）
+ */
+async function translateTextStream(
+  params: TranslateRequest,
+  onChunk: (text: string) => void,
+  onDone: () => void,
+  onError: (error: Error) => void
+) {
+  try {
+    const response = await fetch(`${API_BASE}/translate/text/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应流')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let fullText = ''
+    let currentEvent = ''
+    let currentData = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        
+        // 跳过空行，遇到空行表示一条消息结束
+        if (line === '') {
+          // 处理已收集的消息
+          if (currentEvent && currentData) {
+            if (currentEvent === 'message') {
+              try {
+                const data = JSON.parse(currentData)
+                if (data.text) {
+                  fullText += data.text
+                  onChunk(fullText)
+                }
+              } catch (e) {
+                console.warn('解析 SSE 数据失败:', e)
+              }
+            } else if (currentEvent === 'done') {
+              onDone()
+              return
+            }
+          }
+          currentEvent = ''
+          currentData = ''
+          continue
+        }
+
+        // 解析 event: 行
+        if (line.startsWith('event:')) {
+          currentEvent = line.substring(6).trim()
+        }
+        // 解析 data: 行
+        else if (line.startsWith('data:')) {
+          currentData = line.substring(5).trim()
+        }
+      }
+    }
+
+    // 处理最后剩余的数据
+    if (currentEvent && currentData) {
+      if (currentEvent === 'message') {
+        try {
+          const data = JSON.parse(currentData)
+          if (data.text) {
+            fullText += data.text
+            onChunk(fullText)
+          }
+        } catch (e) {
+          console.warn('解析 SSE 数据失败:', e)
+        }
+      } else if (currentEvent === 'done') {
+        onDone()
+      }
+    }
+  } catch (error) {
+    onError(error as Error)
+  }
+}
+
 // ==================== 事件处理 ====================
+
+/**
+ * 图片翻译（流式）
+ */
+async function translateImageStream(
+  file: File,
+  from: string,
+  to: string,
+  onChunk: (text: string) => void,
+  onDone: () => void,
+  onError: (error: Error) => void
+) {
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('from', from)
+    formData.append('to', to)
+
+    const response = await fetch(`${API_BASE}/translate/image/stream`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应流')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let fullText = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        
+        // 跳过空行
+        if (line === '') continue
+        
+        // 解析 data: 行
+        if (line.startsWith('data:')) {
+          const dataStr = line.substring(5).trim()
+          
+          // 处理结束标记
+          if (dataStr === '[DONE]') {
+            onDone()
+            return
+          }
+          
+          try {
+            const json = JSON.parse(dataStr)
+            // 提取 content 字段
+            const choices = json.choices
+            if (choices && choices.length > 0) {
+              const delta = choices[0].delta
+              if (delta && delta.content) {
+                fullText += delta.content
+                onChunk(fullText)
+              }
+              // 检查是否完成
+              if (choices[0].finish_reason === 'stop') {
+                onDone()
+                return
+              }
+            }
+          } catch (e) {
+            console.warn('解析 SSE 数据失败:', e, dataStr)
+          }
+        }
+      }
+    }
+
+    onDone()
+  } catch (error) {
+    onError(error as Error)
+  }
+}
 
 /**
  * 执行翻译
@@ -124,11 +312,13 @@ async function handleTranslate() {
   duration.value = 0
   isCached.value = false
 
+  const startTime = Date.now()
+
   try {
     const from = fromLang.value === 'auto' ? 'auto' : fromLang.value
 
     if (activeTab.value === 'text') {
-      // 文本翻译
+      // 文本翻译 - 使用流式输出
       const request: TranslateRequest = {
         text: inputText.value,
         from,
@@ -136,32 +326,49 @@ async function handleTranslate() {
         domain: domain.value,
         style: style.value,
       }
-      const { data } = await api.post<ApiResponse<TranslateResult>>('/translate/text', request)
-      if (data.code === 200) {
-        resultText.value = data.data.translatedText
-        duration.value = data.data.durationMs
-        isCached.value = data.data.cached
-        ElMessage.success('翻译完成')
-      } else {
-        ElMessage.error(data.message || '翻译失败')
-      }
+
+      await translateTextStream(
+        request,
+        // onChunk: 实时更新翻译结果
+        (text: string) => {
+          resultText.value = text
+        },
+        // onDone: 翻译完成
+        () => {
+          duration.value = Date.now() - startTime
+          loading.value = false
+          ElMessage.success('翻译完成')
+        },
+        // onError: 错误处理
+        (error: Error) => {
+          console.error('流式翻译错误:', error)
+          loading.value = false
+          ElMessage.error('翻译服务异常，请检查后端是否启动')
+        }
+      )
     } else if (activeTab.value === 'image') {
-      // 图片翻译保持非流式
-      const formData = new FormData()
-      formData.append('file', imageFile.value!)
-      formData.append('from', from)
-      formData.append('to', toLang.value)
-      const { data } = await api.post('/translate/image', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      if (data.code === 200) {
-        extractedText.value = data.data.extractedText
-        resultText.value = data.data.translatedText
-        duration.value = data.data.durationMs
-        ElMessage.success('图片翻译完成')
-      } else {
-        ElMessage.error(data.message || '图片翻译失败')
-      }
+      // 图片翻译 - 使用流式输出
+      await translateImageStream(
+        imageFile.value!,
+        from,
+        toLang.value,
+        // onChunk: 实时更新翻译结果
+        (text: string) => {
+          resultText.value = text
+        },
+        // onDone: 翻译完成
+        () => {
+          duration.value = Date.now() - startTime
+          loading.value = false
+          ElMessage.success('图片翻译完成')
+        },
+        // onError: 错误处理
+        (error: Error) => {
+          console.error('图片翻译错误:', error)
+          loading.value = false
+          ElMessage.error('图片翻译服务异常')
+        }
+      )
     } else if (activeTab.value === 'audio') {
       // 语音翻译保持非流式
       const formData = new FormData()
@@ -184,7 +391,9 @@ async function handleTranslate() {
     console.error('翻译错误:', err)
     ElMessage.error(err.response?.data?.message || '翻译服务异常，请检查后端是否启动')
   } finally {
-    loading.value = false
+    if (activeTab.value !== 'text') {
+      loading.value = false
+    }
   }
 }
 

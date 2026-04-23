@@ -3,15 +3,17 @@ package com.alan.aillm.service;
 import com.alan.aicommon.exception.LlmException;
 import com.alan.aillm.config.LlmConfig;
 import com.alan.aillm.dto.request.ChatRequest;
-import com.alan.aillm.dto.response.ChatResponse;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Flux;
 
 import jakarta.annotation.PostConstruct;
 import javax.imageio.ImageIO;
@@ -32,6 +34,7 @@ public class VisionLlmService {
     private LlmConfig llmConfig;
 
     private WebClient webClient;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     @PostConstruct
     public void init() {
         // 图片翻译需要更长的超时时间，设置为120秒
@@ -39,7 +42,7 @@ public class VisionLlmService {
         webClient = WebClient.builder()
                 .baseUrl(llmConfig.getBaseUrl())
                 .defaultHeader("Content-Type", "application/json")
-                .defaultHeader("Accept", "application/json")
+                .defaultHeader("Accept", "text/event-stream")
                 .build();
         log.info("VisionLlmService初始化完成: connectTimeout={}ms, readTimeout={}ms", 
                 llmConfig.getTimeout(), visionTimeout);
@@ -166,34 +169,33 @@ public class VisionLlmService {
         requestBody.put("temperature", llmConfig.getTemperature());
         requestBody.put("top_p", llmConfig.getTopP());
         requestBody.put("max_tokens", llmConfig.getMaxTokens());
+        requestBody.put("stream", true);
 
         log.info("请求体构建完成: model={}, messages.size={}", 
                 llmConfig.getModel(), messages.size());
 
         long startTime = System.currentTimeMillis();
         try {
-            log.info("发送Vision LLM请求...");
-            ChatResponse response = webClient.post()
+            log.info("发送Vision LLM流式请求...");
+            String responseBody = webClient.post()
                     .uri(url)
                     .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
                             ? "Bearer " + llmConfig.getApiKey() : null)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
                     .bodyValue(requestBody)
                     .retrieve()
-                    .bodyToMono(ChatResponse.class)
+                    .bodyToMono(String.class)
                     .block();
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("Vision LLM响应成功: duration={}ms", duration);
 
-            if (response == null) {
+            if (responseBody == null || responseBody.isEmpty()) {
                 log.error("LLM返回响应体为空");
                 throw new LlmException("LLM返回响应体为空");
             }
 
-            log.info("LLM响应体: choices.size={}", 
-                    response.getChoices() != null ? response.getChoices().size() : 0);
-
-            return extractContent(response);
+            return parseStreamResponse(responseBody);
         } catch (WebClientResponseException e) {
             String body = e.getResponseBodyAsString();
             log.error("Vision LLM服务器错误: status={}, body={}", e.getStatusCode(), body);
@@ -204,23 +206,82 @@ public class VisionLlmService {
         }
     }
 
-    private String extractContent(ChatResponse response) {
-        if (response.getChoices() == null || response.getChoices().isEmpty()) {
-            throw new LlmException("LLM返回choices为空");
-        }
+    /**
+     * 调用Vision LLM API 返回真正的流式 Flux
+     */
+    public Flux<String> callVisionApiStream(List<Object> messages) {
+        String url = "/chat/completions";
+        log.info("调用Vision LLM API (流式Flux): {}{}", llmConfig.getBaseUrl(), url);
 
-        ChatResponse.Choice choice = response.getChoices().get(0);
-        if (choice.getMessage() == null || choice.getMessage().getContent() == null) {
-            throw new LlmException("LLM返回消息内容为空");
-        }
+        Map<String, Object> requestBody = new java.util.HashMap<>();
+        requestBody.put("model", llmConfig.getModel());
+        requestBody.put("messages", messages);
+        requestBody.put("temperature", llmConfig.getTemperature());
+        requestBody.put("top_p", llmConfig.getTopP());
+        requestBody.put("max_tokens", llmConfig.getMaxTokens());
+        requestBody.put("stream", true);
 
-        String content = choice.getMessage().getContent();
-        if (content.trim().isEmpty()) {
+        log.info("请求体构建完成: model={}, messages.size={}", 
+                llmConfig.getModel(), messages.size());
+
+        long startTime = System.currentTimeMillis();
+        log.info("发送Vision LLM流式请求 (Flux)...");
+        return webClient.post()
+                .uri(url)
+                .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
+                        ? "Bearer " + llmConfig.getApiKey() : null)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToFlux(String.class)
+                .doOnComplete(() -> {
+                    long duration = System.currentTimeMillis() - startTime;
+                    log.info("Vision LLM流式响应完成: duration={}ms", duration);
+                })
+                .doOnError(e -> {
+                    log.error("Vision LLM流式调用失败: error={}", e.getMessage(), e);
+                });
+    }
+
+    private String parseStreamResponse(String responseBody) {
+        StringBuilder content = new StringBuilder();
+        String[] lines = responseBody.split("\n");
+        
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty() || !line.startsWith("data:")) {
+                continue;
+            }
+            
+            String data = line.substring(5).trim();
+            if (data.equals("[DONE]")) {
+                break;
+            }
+            
+            try {
+                JsonNode jsonNode = objectMapper.readTree(data);
+                JsonNode choices = jsonNode.get("choices");
+                if (choices != null && choices.isArray() && choices.size() > 0) {
+                    JsonNode delta = choices.get(0).get("delta");
+                    if (delta != null) {
+                        JsonNode contentNode = delta.get("content");
+                        if (contentNode != null && !contentNode.isNull()) {
+                            content.append(contentNode.asText());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("解析流式响应行失败: {}", e.getMessage());
+            }
+        }
+        
+        String result = content.toString().trim();
+        if (result.isEmpty()) {
             throw new LlmException("LLM返回消息内容为空字符串");
         }
-
-        log.info("提取内容成功: 长度={}", content.length());
-        return content.trim();
+        
+        log.info("提取内容成功: 长度={}", result.length());
+        return result;
     }
 
     private String buildImageTranslatePrompt(String from, String to, String domain, String style) {
