@@ -1,6 +1,7 @@
 package com.alan.aitranslator.service;
 
 import com.alan.aicommon.exception.TranslationException;
+import com.alan.aillm.dto.request.ChatRequest;
 import com.alan.aillm.service.VisionLlmService;
 import com.alan.aiocr.service.OcrException;
 import com.alan.aiocr.service.OcrService;
@@ -13,6 +14,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.Base64;
+import java.util.List;
+
+import reactor.core.publisher.Flux;
 
 @Slf4j
 @Service
@@ -61,7 +66,6 @@ public class ImageTranslateService {
             log.info("Vision LLM图片翻译成功: duration={}ms", duration);
 
             return ImageTranslateResponse.builder()
-                    .extractedText("[由Vision LLM直接处理]")
                     .translatedText(translatedText)
                     .from(from)
                     .to(to)
@@ -75,6 +79,81 @@ public class ImageTranslateService {
             log.error("Vision LLM图片翻译失败", e);
             throw new TranslationException("Vision LLM图片翻译失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 图片翻译（流式）- 返回Flux
+     */
+    public Flux<String> translateImageStream(MultipartFile imageFile, String from, String to) {
+        validateImage(imageFile);
+
+        log.info("图片翻译请求（流式）: from={}, to={}, size={}", from, to, imageFile.getSize());
+
+        try {
+            byte[] imageBytes = imageFile.getBytes();
+            log.info("图片读取成功，大小: {} bytes", imageBytes.length);
+            
+            String base64Image = Base64.getEncoder().encodeToString(imageBytes);
+            log.info("图片Base64编码成功，长度: {} chars", base64Image.length());
+            
+            String domain = translatorConfig.getDefaultDomain();
+            String style = translatorConfig.getDefaultStyle();
+            log.info("使用配置: domain={}, style={}", domain, style);
+
+            log.info("开始调用Vision LLM服务（流式）...");
+            
+            String systemPrompt = buildImageTranslatePrompt(from, to, domain, style);
+            String userText = "请识别图片中的文字并将其翻译为目标语言。只输出翻译结果，不要添加任何解释。";
+            
+            List<Object> messages = List.of(
+                    ChatRequest.Message.system(systemPrompt),
+                    ChatRequest.VisionMessage.userWithImage(userText, base64Image)
+            );
+
+            return visionLlmService.callVisionApiStream(messages);
+        } catch (IOException e) {
+            log.error("读取图片文件失败", e);
+            return Flux.error(new TranslationException("读取图片文件失败: " + e.getMessage()));
+        }
+    }
+
+    private String buildImageTranslatePrompt(String from, String to, String domain, String style) {
+        String domainDesc = switch (domain.toLowerCase()) {
+            case "tech" -> "技术领域（计算机、软件工程相关术语）";
+            case "medical" -> "医学领域（临床、解剖、药理等术语）";
+            case "legal" -> "法律领域（合同、法规、诉讼文书）";
+            case "business" -> "商业领域（财务、管理、市场术语）";
+            case "literary" -> "文学领域（小说、诗歌、散文）";
+            default -> "通用领域";
+        };
+
+        String styleDesc = switch (style.toLowerCase()) {
+            case "formal" -> "正式、书面语风格";
+            case "casual" -> "口语化、自然风格";
+            case "academic" -> "学术、严谨风格";
+            default -> "中性风格，保持原文语气";
+        };
+
+        return String.format("""
+                你是专业的图片翻译引擎，能够识别图片中的文字并进行高质量翻译。
+
+                任务：
+                1. 识别图片中的所有文字内容
+                2. 将识别到的文字从%s翻译为%s
+                3. 保持原文的格式和排版
+
+                领域: %s - %s
+                风格: %s
+
+                规则:
+                1. 只输出翻译后的结果
+                2. 保持原文的格式、换行和标点风格
+                3. 专业术语使用领域标准译法
+                4. 保留专有名词（人名、地名、品牌名）原文
+                5. 代码片段和技术术语不要翻译
+                6. 如遇无法翻译的内容，原样返回
+                7. 输出必须完整，不能截断
+                """, from, to, domain, domainDesc, styleDesc);
     }
 
     /**

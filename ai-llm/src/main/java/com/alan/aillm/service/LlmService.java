@@ -4,12 +4,11 @@ import com.alan.aicommon.exception.LlmException;
 import com.alan.aillm.config.LlmConfig;
 import com.alan.aillm.dto.request.ChatRequest;
 import com.alan.aillm.dto.response.ChatResponse;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
@@ -28,13 +27,14 @@ public class LlmService {
     private LlmConfig llmConfig;
 
     private WebClient webClient;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostConstruct
     public void init() {
         webClient = WebClient.builder()
                 .baseUrl(llmConfig.getBaseUrl())
                 .defaultHeader("Content-Type", "application/json")
-                .defaultHeader("Accept", "application/json")
+                .defaultHeader("Accept", "text/event-stream")
                 .build();
     }
 
@@ -50,9 +50,7 @@ public class LlmService {
 
         log.debug("LLM请求: model={}, messages={}", llmConfig.getModel(), messages.size());
 
-        ChatResponse response = callApi(request);
-
-        return extractContent(response);
+        return callStreamApi(request);
     }
 
     private ChatRequest buildRequest(List<ChatRequest.Message> messages) {
@@ -62,7 +60,7 @@ public class LlmService {
         request.setTemperature(llmConfig.getTemperature());
         request.setTopP(llmConfig.getTopP());
         request.setMaxTokens(llmConfig.getMaxTokens());
-        request.setStream(false);
+        request.setStream(true);
         return request;
     }
 
@@ -71,28 +69,30 @@ public class LlmService {
             maxAttemptsExpression = "${ai.llm.max-retries:3}",
             backoff = @Backoff(delay = 1000, multiplier = 2)
     )
-    private ChatResponse callApi(ChatRequest request) {
+    private String callStreamApi(ChatRequest request) {
         String url = "/chat/completions";
 
         long startTime = System.currentTimeMillis();
         try {
-            ChatResponse response = webClient.post()
+            log.info("发送流式LLM请求...");
+            String responseBody = webClient.post()
                     .uri(url)
                     .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
                             ? "Bearer " + llmConfig.getApiKey() : null)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
                     .bodyValue(request)
                     .retrieve()
-                    .bodyToMono(ChatResponse.class)
+                    .bodyToMono(String.class)
                     .block();
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("LLM响应成功: duration={}ms, model={}", duration, llmConfig.getModel());
 
-            if (response == null) {
+            if (responseBody == null || responseBody.isEmpty()) {
                 throw new LlmException("LLM返回响应体为空");
             }
 
-            return response;
+            return parseStreamResponse(responseBody);
         } catch (WebClientResponseException e) {
             log.error("LLM服务器错误: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new LlmException("LLM服务器错误: " + e.getStatusCode() + ", " + e.getResponseBodyAsString(), e);
@@ -102,22 +102,45 @@ public class LlmService {
         }
     }
 
-    private String extractContent(ChatResponse response) {
-        if (response.getChoices() == null || response.getChoices().isEmpty()) {
-            throw new LlmException("LLM返回choices为空");
+    private String parseStreamResponse(String responseBody) {
+        StringBuilder content = new StringBuilder();
+        String[] lines = responseBody.split("\n");
+        
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty() || !line.startsWith("data:")) {
+                continue;
+            }
+            
+            String data = line.substring(5).trim();
+            if (data.equals("[DONE]")) {
+                break;
+            }
+            
+            try {
+                JsonNode jsonNode = objectMapper.readTree(data);
+                JsonNode choices = jsonNode.get("choices");
+                if (choices != null && choices.isArray() && choices.size() > 0) {
+                    JsonNode delta = choices.get(0).get("delta");
+                    if (delta != null) {
+                        JsonNode contentNode = delta.get("content");
+                        if (contentNode != null && !contentNode.isNull()) {
+                            content.append(contentNode.asText());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("解析流式响应行失败: {}", e.getMessage());
+            }
         }
-
-        ChatResponse.Choice choice = response.getChoices().get(0);
-        if (choice.getMessage() == null || choice.getMessage().getContent() == null) {
-            throw new LlmException("LLM返回消息内容为空");
-        }
-
-        String content = choice.getMessage().getContent();
-        if (content.trim().isEmpty()) {
+        
+        String result = content.toString().trim();
+        if (result.isEmpty()) {
             throw new LlmException("LLM返回消息内容为空字符串");
         }
-
-        return content.trim();
+        
+        log.info("提取内容成功: 长度={}", result.length());
+        return result;
     }
 
     public String chatWithHistory(String systemPrompt, String userPrompt, List<ChatRequest.Message> history) {
