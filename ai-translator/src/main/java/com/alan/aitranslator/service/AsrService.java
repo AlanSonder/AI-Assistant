@@ -1,16 +1,11 @@
 package com.alan.aitranslator.service;
 
+import com.alan.aillm.config.LlmConfig;
 import com.alan.aitranslator.config.TranslatorConfig;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 
 import java.io.File;
 import java.io.IOException;
@@ -26,13 +21,22 @@ public class AsrService {
 
     private final String asrApiUrl;
 
-    public AsrService(TranslatorConfig translatorConfig) {
+    public AsrService(LlmConfig llmConfig, TranslatorConfig translatorConfig) {
+        String baseUrl = llmConfig.getBaseUrl();
+        if (baseUrl == null || baseUrl.isEmpty()) {
+            throw new IllegalArgumentException("LLM baseUrl configuration is required");
+        }
+        
+        // 提取baseUrl的基础部分（不含/v1）
+        String webClientBaseUrl = baseUrl.replace("/v1", "");
+        
         this.webClient = WebClient.builder()
-                .baseUrl("http://localhost:1234")
+                .baseUrl(webClientBaseUrl)
                 .defaultHeader("Content-Type", "application/json")
                 .defaultHeader("Accept", "application/json")
                 .build();
-        this.asrApiUrl = "http://localhost:1234/v1/audio/transcriptions";
+        
+        this.asrApiUrl = baseUrl + "/audio/transcriptions";
         log.info("ASR服务初始化: API地址={}", asrApiUrl);
     }
 
