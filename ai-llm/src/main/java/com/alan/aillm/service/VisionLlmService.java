@@ -7,10 +7,6 @@ import com.alan.aillm.dto.response.ChatResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
@@ -36,8 +32,6 @@ public class VisionLlmService {
     private LlmConfig llmConfig;
 
     private WebClient webClient;
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
     @PostConstruct
     public void init() {
         // 图片翻译需要更长的超时时间，设置为120秒

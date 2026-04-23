@@ -9,21 +9,21 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "ai.llm")
 public class LlmConfig {
 
-    private String baseUrl = "http://localhost:1234/v1";
+    private String baseUrl;
 
-    private String model = "qwen";
+    private String model;
 
-    private String apiKey = "";
+    private String apiKey;
 
-    private long timeout = 30000;
+    private long timeout;
 
-    private int maxRetries = 3;
+    private int maxRetries;
 
-    private double temperature = 0.3;
+    private double temperature;
 
-    private double topP = 0.9;
+    private double topP;
 
-    private int maxTokens = 4096;
+    private int maxTokens;
 
-    private boolean stream = false;
+    private boolean stream;
 }
