@@ -13,10 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.ResourceAccessException;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
@@ -29,15 +27,15 @@ public class LlmService {
     @Autowired
     private LlmConfig llmConfig;
 
-    private RestTemplate restTemplate;
+    private WebClient webClient;
 
     @PostConstruct
     public void init() {
-        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
-                new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout((int) llmConfig.getTimeout());
-        factory.setReadTimeout((int) llmConfig.getTimeout());
-        restTemplate = new RestTemplate(factory);
+        webClient = WebClient.builder()
+                .baseUrl(llmConfig.getBaseUrl())
+                .defaultHeader("Content-Type", "application/json")
+                .defaultHeader("Accept", "application/json")
+                .build();
     }
 
     public String chat(String systemPrompt, String userPrompt) {
@@ -69,41 +67,36 @@ public class LlmService {
     }
 
     @Retryable(
-            value = {ResourceAccessException.class, HttpServerErrorException.class},
+            value = {WebClientResponseException.class, RuntimeException.class},
             maxAttemptsExpression = "${ai.llm.max-retries:3}",
             backoff = @Backoff(delay = 1000, multiplier = 2)
     )
     private ChatResponse callApi(ChatRequest request) {
-        String url = llmConfig.getBaseUrl() + "/chat/completions";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        if (llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty()) {
-            headers.set("Authorization", "Bearer " + llmConfig.getApiKey());
-        }
-
-        HttpEntity<ChatRequest> entity = new HttpEntity<>(request, headers);
+        String url = "/chat/completions";
 
         long startTime = System.currentTimeMillis();
         try {
-            ResponseEntity<ChatResponse> response =
-                    restTemplate.postForEntity(url, entity, ChatResponse.class);
+            ChatResponse response = webClient.post()
+                    .uri(url)
+                    .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
+                            ? "Bearer " + llmConfig.getApiKey() : null)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(ChatResponse.class)
+                    .block();
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("LLM响应成功: duration={}ms, model={}", duration, llmConfig.getModel());
 
-            if (response.getBody() == null) {
+            if (response == null) {
                 throw new LlmException("LLM返回响应体为空");
             }
 
-            return response.getBody();
-        } catch (ResourceAccessException e) {
-            log.error("LLM连接异常: url={}, error={}", url, e.getMessage());
-            throw e;
-        } catch (HttpServerErrorException e) {
+            return response;
+        } catch (WebClientResponseException e) {
             log.error("LLM服务器错误: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
-            throw e;
-        } catch (RestClientException e) {
+            throw new LlmException("LLM服务器错误: " + e.getStatusCode() + ", " + e.getResponseBodyAsString(), e);
+        } catch (Exception e) {
             log.error("LLM调用失败: error={}", e.getMessage(), e);
             throw new LlmException("LLM调用失败: " + e.getMessage(), e);
         }

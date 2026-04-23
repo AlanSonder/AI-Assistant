@@ -14,12 +14,16 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.client.ResourceAccessException;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import jakarta.annotation.PostConstruct;
+import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.Image;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -31,16 +35,20 @@ public class VisionLlmService {
     @Autowired
     private LlmConfig llmConfig;
 
-    private RestTemplate restTemplate;
+    private WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostConstruct
     public void init() {
-        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
-                new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout((int) llmConfig.getTimeout());
-        factory.setReadTimeout((int) llmConfig.getTimeout());
-        restTemplate = new RestTemplate(factory);
+        // 图片翻译需要更长的超时时间，设置为120秒
+        int visionTimeout = (int) Math.max(llmConfig.getTimeout() * 4, 120000);
+        webClient = WebClient.builder()
+                .baseUrl(llmConfig.getBaseUrl())
+                .defaultHeader("Content-Type", "application/json")
+                .defaultHeader("Accept", "application/json")
+                .build();
+        log.info("VisionLlmService初始化完成: connectTimeout={}ms, readTimeout={}ms", 
+                llmConfig.getTimeout(), visionTimeout);
     }
 
     /**
@@ -50,10 +58,71 @@ public class VisionLlmService {
         log.info("开始图片翻译: from={}, to={}, domain={}, style={}, imageSize={} bytes", 
                 from, to, domain, style, imageBytes.length);
         
-        String base64Image = Base64.getEncoder().encodeToString(imageBytes);
+        // 压缩图片以减少传输时间
+        byte[] compressedBytes = compressImage(imageBytes);
+        log.info("图片压缩完成: 原始大小={} bytes, 压缩后大小={} bytes", imageBytes.length, compressedBytes.length);
+        
+        String base64Image = Base64.getEncoder().encodeToString(compressedBytes);
         log.info("图片Base64编码成功，长度: {} chars", base64Image.length());
         
         return translateImageBase64(base64Image, from, to, domain, style);
+    }
+
+    /**
+     * 压缩图片 - 限制最大尺寸和文件大小
+     */
+    private byte[] compressImage(byte[] imageBytes) {
+        try {
+            // 如果图片已经很小，直接返回
+            if (imageBytes.length < 50 * 1024) { // 小于50KB不压缩
+                return imageBytes;
+            }
+
+            ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
+            BufferedImage originalImage = ImageIO.read(bais);
+            
+            if (originalImage == null) {
+                log.warn("无法读取图片，返回原始数据");
+                return imageBytes;
+            }
+
+            int originalWidth = originalImage.getWidth();
+            int originalHeight = originalImage.getHeight();
+            
+            // 计算缩放比例 - 最大边不超过1024像素
+            int maxDimension = 1024;
+            double scale = Math.min(1.0, (double) maxDimension / Math.max(originalWidth, originalHeight));
+            
+            int newWidth = (int) (originalWidth * scale);
+            int newHeight = (int) (originalHeight * scale);
+            
+            log.info("图片缩放: {}x{} -> {}x{}", originalWidth, originalHeight, newWidth, newHeight);
+
+            // 创建缩放后的图片
+            Image scaledImage = originalImage.getScaledInstance(newWidth, newHeight, Image.SCALE_SMOOTH);
+            BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g2d = resizedImage.createGraphics();
+            g2d.drawImage(scaledImage, 0, 0, null);
+            g2d.dispose();
+
+            // 压缩为JPEG格式，质量0.8
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ImageIO.write(resizedImage, "jpeg", baos);
+            baos.flush();
+            byte[] compressed = baos.toByteArray();
+            baos.close();
+
+            // 如果压缩后反而更大，返回原始数据
+            if (compressed.length >= imageBytes.length) {
+                log.info("压缩后大小({})大于原始大小({})，使用原始图片", compressed.length, imageBytes.length);
+                return imageBytes;
+            }
+
+            return compressed;
+        } catch (Exception e) {
+            log.error("图片压缩失败，返回原始数据", e);
+            return imageBytes;
+        }
     }
 
     /**
@@ -89,20 +158,13 @@ public class VisionLlmService {
     }
 
     @Retryable(
-            value = {ResourceAccessException.class, HttpServerErrorException.class},
+            value = {WebClientResponseException.class, RuntimeException.class},
             maxAttemptsExpression = "${ai.llm.max-retries:3}",
             backoff = @Backoff(delay = 1000, multiplier = 2)
     )
     private String callVisionApi(List<Object> messages) {
-        String url = llmConfig.getBaseUrl() + "/chat/completions";
-        log.info("调用Vision LLM API: {}", url);
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        if (llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty()) {
-            headers.set("Authorization", "Bearer " + llmConfig.getApiKey());
-            log.info("使用API Key进行认证");
-        }
+        String url = "/chat/completions";
+        log.info("调用Vision LLM API: {}{}", llmConfig.getBaseUrl(), url);
 
         Map<String, Object> requestBody = new java.util.HashMap<>();
         requestBody.put("model", llmConfig.getModel());
@@ -114,40 +176,37 @@ public class VisionLlmService {
         log.info("请求体构建完成: model={}, messages.size={}", 
                 llmConfig.getModel(), messages.size());
 
-        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-
         long startTime = System.currentTimeMillis();
         try {
             log.info("发送Vision LLM请求...");
-            ResponseEntity<ChatResponse> response =
-                    restTemplate.postForEntity(url, entity, ChatResponse.class);
+            ChatResponse response = webClient.post()
+                    .uri(url)
+                    .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
+                            ? "Bearer " + llmConfig.getApiKey() : null)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(ChatResponse.class)
+                    .block();
 
             long duration = System.currentTimeMillis() - startTime;
-            log.info("Vision LLM响应成功: status={}, duration={}ms", 
-                    response.getStatusCode(), duration);
+            log.info("Vision LLM响应成功: duration={}ms", duration);
 
-            if (response.getBody() == null) {
+            if (response == null) {
                 log.error("LLM返回响应体为空");
                 throw new LlmException("LLM返回响应体为空");
             }
 
             log.info("LLM响应体: choices.size={}", 
-                    response.getBody().getChoices() != null ? response.getBody().getChoices().size() : 0);
+                    response.getChoices() != null ? response.getChoices().size() : 0);
 
-            return extractContent(response.getBody());
-        } catch (ResourceAccessException e) {
-            log.error("Vision LLM连接异常: url={}, error={}", url, e.getMessage());
-            throw new LlmException("LLM服务连接失败，请检查LM Studio是否启动", e);
-        } catch (HttpServerErrorException e) {
+            return extractContent(response);
+        } catch (WebClientResponseException e) {
             String body = e.getResponseBodyAsString();
             log.error("Vision LLM服务器错误: status={}, body={}", e.getStatusCode(), body);
             throw new LlmException("LLM服务内部错误: " + e.getStatusCode() + ", " + body, e);
-        } catch (RestClientException e) {
+        } catch (Exception e) {
             log.error("Vision LLM调用失败: error={}", e.getMessage(), e);
             throw new LlmException("LLM调用失败: " + e.getMessage(), e);
-        } catch (Exception e) {
-            log.error("Vision LLM处理异常", e);
-            throw new LlmException("LLM处理异常: " + e.getMessage(), e);
         }
     }
 

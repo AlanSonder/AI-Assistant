@@ -71,12 +71,6 @@ const resultText = ref('')
 const loading = ref(false)
 const duration = ref(0)
 const isCached = ref(false)
-const isStreaming = ref(false)
-
-// 流式输出相关
-const streamText = ref('')
-const streamLoading = ref(false)
-const streamAbortController = ref<AbortController | null>(null)
 
 // 文件上传相关
 const imageFile = ref<File | null>(null)
@@ -98,105 +92,6 @@ const api = axios.create({
 async function translateTextApi(params: TranslateRequest): Promise<ApiResponse<TranslateResult>> {
   const { data } = await api.post<ApiResponse<TranslateResult>>('/translate/text', params)
   return data
-}
-
-// ==================== 流式翻译 ====================
-
-/**
- * 流式文本翻译 - 使用 EventSource
- */
-function translateStream(request: TranslateRequest) {
-  streamAbortController.value = new AbortController()
-  streamLoading.value = true
-  streamText.value = ''
-  isStreaming.value = true
-
-  fetch('/api/v1/translate/stream/text', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-    },
-    body: JSON.stringify(request),
-    signal: streamAbortController.value.signal,
-  })
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-      const reader = response.body?.getReader()
-      const decoder = new TextDecoder()
-
-      if (!reader) {
-        throw new Error('无法读取响应流')
-      }
-
-      function readStream(): Promise<void> {
-        return reader.read().then(({ done, value }) => {
-          if (done) {
-            streamLoading.value = false
-            isStreaming.value = false
-            ElMessage.success('流式翻译完成')
-            return
-          }
-
-          const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
-
-          for (const line of lines) {
-            if (line.startsWith('event:')) {
-              const eventName = line.substring(6).trim()
-              // 读取下一行 data:
-              continue
-            }
-            if (line.startsWith('data:')) {
-              const data = line.substring(5).trim()
-              try {
-                const parsed = JSON.parse(data)
-                if (parsed.content) {
-                  streamText.value += parsed.content
-                }
-                if (parsed.finish) {
-                  streamLoading.value = false
-                  isStreaming.value = false
-                }
-                if (parsed.error) {
-                  ElMessage.error(parsed.error)
-                  streamLoading.value = false
-                  isStreaming.value = false
-                }
-              } catch (e) {
-                // 忽略非JSON数据
-              }
-            }
-          }
-
-          return readStream()
-        })
-      }
-
-      return readStream()
-    })
-    .catch((error) => {
-      if (error.name === 'AbortError') {
-        ElMessage.info('翻译已取消')
-      } else {
-        console.error('流式翻译错误:', error)
-        ElMessage.error('流式翻译失败: ' + error.message)
-      }
-      streamLoading.value = false
-      isStreaming.value = false
-    })
-}
-
-/**
- * 取消流式翻译
- */
-function cancelStream() {
-  if (streamAbortController.value) {
-    streamAbortController.value.abort()
-    streamAbortController.value = null
-  }
 }
 
 // ==================== 事件处理 ====================
@@ -224,7 +119,6 @@ async function handleTranslate() {
 
   loading.value = true
   resultText.value = ''
-  streamText.value = ''
   extractedText.value = ''
   recognizedText.value = ''
   duration.value = 0
@@ -234,7 +128,7 @@ async function handleTranslate() {
     const from = fromLang.value === 'auto' ? 'auto' : fromLang.value
 
     if (activeTab.value === 'text') {
-      // 使用流式翻译
+      // 文本翻译
       const request: TranslateRequest = {
         text: inputText.value,
         from,
@@ -242,8 +136,15 @@ async function handleTranslate() {
         domain: domain.value,
         style: style.value,
       }
-      translateStream(request)
-      loading.value = false
+      const { data } = await api.post<ApiResponse<TranslateResult>>('/translate/text', request)
+      if (data.code === 200) {
+        resultText.value = data.data.translatedText
+        duration.value = data.data.durationMs
+        isCached.value = data.data.cached
+        ElMessage.success('翻译完成')
+      } else {
+        ElMessage.error(data.message || '翻译失败')
+      }
     } else if (activeTab.value === 'image') {
       // 图片翻译保持非流式
       const formData = new FormData()
@@ -295,17 +196,10 @@ function handleClear() {
   imageFile.value = null
   audioFile.value = null
   resultText.value = ''
-  streamText.value = ''
   extractedText.value = ''
   recognizedText.value = ''
   duration.value = 0
   isCached.value = false
-  isStreaming.value = false
-  streamLoading.value = false
-  if (streamAbortController.value) {
-    streamAbortController.value.abort()
-    streamAbortController.value = null
-  }
   ElMessage.info('已清空')
 }
 
@@ -313,13 +207,12 @@ function handleClear() {
  * 复制翻译结果
  */
 async function handleCopy() {
-  const textToCopy = streamText.value || resultText.value
-  if (!textToCopy) {
+  if (!resultText.value) {
     ElMessage.warning('没有可复制的内容')
     return
   }
   try {
-    await navigator.clipboard.writeText(textToCopy)
+    await navigator.clipboard.writeText(resultText.value)
     ElMessage.success('已复制到剪贴板')
   } catch {
     ElMessage.error('复制失败')
@@ -477,22 +370,14 @@ function handleAudioChange(file: any) {
       <!-- 操作按钮 -->
       <div class="action-bar">
         <el-button
-          type="primary"
-          size="large"
-          :loading="loading || streamLoading"
-          @click="handleTranslate"
-        >
-          <el-icon><MagicStick /></el-icon>
-          {{ streamLoading ? '翻译中...' : '翻译' }}
-        </el-button>
-        <el-button
-          v-if="streamLoading"
-          type="danger"
-          size="large"
-          @click="cancelStream"
-        >
-          取消
-        </el-button>
+        type="primary"
+        size="large"
+        :loading="loading"
+        @click="handleTranslate"
+      >
+        <el-icon><MagicStick /></el-icon>
+        翻译
+      </el-button>
         <el-button
           size="large"
           @click="handleClear"
@@ -502,37 +387,8 @@ function handleAudioChange(file: any) {
         </el-button>
       </div>
 
-      <!-- 流式输出结果区 -->
-      <el-card v-if="streamText || isStreaming" class="result-card streaming" shadow="hover">
-        <template #header>
-          <div class="result-header">
-            <span>
-              翻译结果
-              <el-tag v-if="isStreaming" type="primary" size="small" effect="light">实时输出中</el-tag>
-            </span>
-            <div class="result-meta">
-              <el-button
-                type="primary"
-                link
-                size="small"
-                @click="handleCopy"
-              >
-                <el-icon><DocumentCopy /></el-icon>
-                复制
-              </el-button>
-            </div>
-          </div>
-        </template>
-        <p class="result-text">{{ streamText }}</p>
-        <div v-if="isStreaming" class="streaming-indicator">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
-      </el-card>
-
-      <!-- 非流式结果区（图片/语音） -->
-      <el-card v-if="resultText && !isStreaming" class="result-card" shadow="hover">
+      <!-- 翻译结果区 -->
+      <el-card v-if="resultText" class="result-card" shadow="hover">
         <template #header>
           <div class="result-header">
             <span>翻译结果</span>
@@ -669,10 +525,6 @@ function handleAudioChange(file: any) {
   border-left: 4px solid #409EFF;
 }
 
-.result-card.streaming {
-  border-left-color: #67C23A;
-}
-
 .result-card :deep(.el-card__header) {
   padding: 14px 20px;
   border-bottom: 1px solid #ebeef5;
@@ -699,40 +551,6 @@ function handleAudioChange(file: any) {
   color: #303133;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-/* 流式输出动画指示器 */
-.streaming-indicator {
-  display: flex;
-  gap: 4px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #ebeef5;
-}
-
-.streaming-indicator .dot {
-  width: 8px;
-  height: 8px;
-  background: #409EFF;
-  border-radius: 50%;
-  animation: bounce 1.4s infinite ease-in-out both;
-}
-
-.streaming-indicator .dot:nth-child(1) {
-  animation-delay: -0.32s;
-}
-
-.streaming-indicator .dot:nth-child(2) {
-  animation-delay: -0.16s;
-}
-
-@keyframes bounce {
-  0%, 80%, 100% {
-    transform: scale(0);
-  }
-  40% {
-    transform: scale(1);
-  }
 }
 
 /* 响应式适配 */

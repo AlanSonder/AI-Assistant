@@ -60,7 +60,7 @@ public class ChatRequest {
     public static class Content {
         private String type;
         private String text;
-        private ImageUrl imageUrl;
+        private ImageUrl image_url;
 
         public static Content text(String text) {
             Content c = new Content();
@@ -72,7 +72,7 @@ public class ChatRequest {
         public static Content image(String base64Data) {
             Content c = new Content();
             c.setType("image_url");
-            c.setImageUrl(new ImageUrl("data:image/jpeg;base64," + base64Data));
+            c.setImage_url(new ImageUrl("data:image/jpeg;base64," + base64Data));
             return c;
         }
     }
