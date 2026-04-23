@@ -21,7 +21,7 @@ public class ChatCompletionsTest {
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     public static void main(String[] args) {
-        try {            
+        try {
             // 测试通用对话
             testChat("什么是人工智能？");
             
