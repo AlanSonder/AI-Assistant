@@ -7,8 +7,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
@@ -22,16 +22,12 @@ import java.util.Map;
 @Service
 public class AsrService {
 
-    private final WebClient webClient;
+    private final RestTemplate restTemplate;
 
     private final String asrApiUrl;
 
     public AsrService(TranslatorConfig translatorConfig) {
-        this.webClient = WebClient.builder()
-                .baseUrl("http://localhost:1234")
-                .defaultHeader("Content-Type", "application/json")
-                .defaultHeader("Accept", "application/json")
-                .build();
+        this.restTemplate = new RestTemplate();
         this.asrApiUrl = "http://localhost:1234/v1/audio/transcriptions";
         log.info("ASR服务初始化: API地址={}", asrApiUrl);
     }
@@ -39,47 +35,38 @@ public class AsrService {
     public String recognize(File audioFile, String language) {
         log.info("语音识别: file={}, size={}", audioFile.getName(), audioFile.length());
 
-        String url = "/v1/audio/transcriptions";
+        String url = asrApiUrl;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", createFileSystemResource(audioFile));
+        body.add("model", "whisper-1");
+        if (language != null && !language.isEmpty()) {
+            body.add("language", language);
+        }
+        body.add("response_format", "text");
+
+        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
         try {
-            // 读取文件并进行base64编码
-            byte[] fileContent = Files.readAllBytes(audioFile.toPath());
-            String base64Audio = Base64.getEncoder().encodeToString(fileContent);
+            ResponseEntity<String> response = restTemplate.postForEntity(url, requestEntity, String.class);
 
-            // 构建JSON请求体
-            Map<String, Object> body = new java.util.HashMap<>();
-            body.put("file", base64Audio);
-            body.put("model", "whisper-1");
-            if (language != null && !language.isEmpty()) {
-                body.put("language", language);
-            }
-            body.put("response_format", "text");
-
-            String response = webClient.post()
-                    .uri(url)
-                    .bodyValue(body)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
-
-            if (response == null || response.trim().isEmpty()) {
+            if (response.getBody() == null || response.getBody().trim().isEmpty()) {
                 throw new AsrException("语音识别返回结果为空");
             }
 
-            String result = response.trim();
+            String result = response.getBody().trim();
             log.info("语音识别完成: 文字长度={}", result.length());
             return result;
-        } catch (WebClientResponseException e) {
-            log.error("语音识别API调用失败: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            log.error("语音识别API调用失败: {}", e.getMessage());
             throw new AsrException("语音识别服务不可用: " + e.getMessage());
-        } catch (IOException e) {
-            log.error("读取音频文件失败: {}", e.getMessage());
-            throw new AsrException("读取音频文件失败: " + e.getMessage());
-        } catch (Exception e) {
-            log.error("语音识别失败: {}", e.getMessage(), e);
-            throw new AsrException("语音识别失败: " + e.getMessage());
         }
     }
 
-
+    private org.springframework.core.io.FileSystemResource createFileSystemResource(File file) {
+        return new org.springframework.core.io.FileSystemResource(file);
+    }
 }
