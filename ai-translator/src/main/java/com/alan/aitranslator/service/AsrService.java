@@ -3,14 +3,16 @@ package com.alan.aitranslator.service;
 import com.alan.aillm.config.LlmConfig;
 import com.alan.aitranslator.config.TranslatorConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
-import java.util.Base64;
 import java.util.Map;
 
 @Slf4j
@@ -46,22 +48,18 @@ public class AsrService {
         String url = "/v1/audio/transcriptions";
 
         try {
-            // 读取文件并进行base64编码
-            byte[] fileContent = Files.readAllBytes(audioFile.toPath());
-            String base64Audio = Base64.getEncoder().encodeToString(fileContent);
-
-            // 构建JSON请求体
-            Map<String, Object> body = new java.util.HashMap<>();
-            body.put("file", base64Audio);
-            body.put("model", "whisper-1");
+            MultipartBodyBuilder builder = new MultipartBodyBuilder();
+            builder.part("file", new FileSystemResource(audioFile));
+            builder.part("model", "whisper-1");
             if (language != null && !language.isEmpty()) {
-                body.put("language", language);
+                builder.part("language", language);
             }
-            body.put("response_format", "text");
+            builder.part("response_format", "text");
 
             String response = webClient.post()
                     .uri(url)
-                    .bodyValue(body)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(BodyInserters.fromMultipartData(builder.build()))
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
@@ -76,9 +74,6 @@ public class AsrService {
         } catch (WebClientResponseException e) {
             log.error("语音识别API调用失败: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new AsrException("语音识别服务不可用: " + e.getMessage());
-        } catch (IOException e) {
-            log.error("读取音频文件失败: {}", e.getMessage());
-            throw new AsrException("读取音频文件失败: " + e.getMessage());
         } catch (Exception e) {
             log.error("语音识别失败: {}", e.getMessage(), e);
             throw new AsrException("语音识别失败: " + e.getMessage());

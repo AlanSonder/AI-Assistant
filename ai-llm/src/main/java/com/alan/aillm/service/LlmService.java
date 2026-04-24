@@ -14,6 +14,7 @@ import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Flux;
 
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
@@ -151,5 +152,51 @@ public class LlmService {
         }
         messages.add(ChatRequest.Message.user(userPrompt));
         return chat(messages);
+    }
+
+    public Flux<String> chatStream(String systemPrompt, String userPrompt) {
+        List<ChatRequest.Message> messages = new ArrayList<>();
+        messages.add(ChatRequest.Message.system(systemPrompt));
+        messages.add(ChatRequest.Message.user(userPrompt));
+        return chatStream(messages);
+    }
+
+    public Flux<String> chatStream(List<ChatRequest.Message> messages) {
+        ChatRequest request = buildRequest(messages);
+        log.debug("LLM流式请求: model={}, messages={}", llmConfig.getModel(), messages.size());
+        return callStreamApiFlux(request);
+    }
+
+    private Flux<String> callStreamApiFlux(ChatRequest request) {
+        String url = "/chat/completions";
+        return webClient.post()
+                .uri(url)
+                .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
+                        ? "Bearer " + llmConfig.getApiKey() : null)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToFlux(String.class)
+                .filter(line -> !line.trim().isEmpty() && line.startsWith("data:"))
+                .map(line -> line.substring(5).trim())
+                .filter(data -> !data.equals("[DONE]"))
+                .flatMap(data -> {
+                    try {
+                        JsonNode jsonNode = objectMapper.readTree(data);
+                        JsonNode choices = jsonNode.get("choices");
+                        if (choices != null && choices.isArray() && choices.size() > 0) {
+                            JsonNode delta = choices.get(0).get("delta");
+                            if (delta != null) {
+                                JsonNode contentNode = delta.get("content");
+                                if (contentNode != null && !contentNode.isNull()) {
+                                    return Flux.just(contentNode.asText());
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("解析流式响应行失败: {}", e.getMessage());
+                    }
+                    return Flux.empty();
+                });
     }
 }

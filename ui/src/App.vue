@@ -64,7 +64,7 @@ const STYLE_OPTIONS = [
 
 const inputText = ref('')
 const fromLang = ref('auto')
-const toLang = ref('en')
+const toLang = ref('zh')
 const domain = ref('general')
 const style = ref('neutral')
 const resultText = ref('')
@@ -370,22 +370,29 @@ async function handleTranslate() {
         }
       )
     } else if (activeTab.value === 'audio') {
-      // 语音翻译保持非流式
-      const formData = new FormData()
-      formData.append('file', audioFile.value!)
-      formData.append('from', from)
-      formData.append('to', toLang.value)
-      const { data } = await api.post('/translate/audio', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      if (data.code === 200) {
-        recognizedText.value = data.data.recognizedText
-        resultText.value = data.data.translatedText
-        duration.value = data.data.durationMs
-        ElMessage.success('语音翻译完成')
-      } else {
-        ElMessage.error(data.message || '语音翻译失败')
-      }
+      await translateAudioStream(
+        audioFile.value!,
+        from,
+        toLang.value,
+        (text: string) => {
+          recognizedText.value = text
+        },
+        (text: string) => {
+          resultText.value = text
+        },
+        (result: { recognizedText: string; translatedText: string; totalDuration: number }) => {
+          recognizedText.value = result.recognizedText
+          resultText.value = result.translatedText
+          duration.value = result.totalDuration
+          loading.value = false
+          ElMessage.success('语音翻译完成')
+        },
+        (error: Error) => {
+          console.error('语音翻译错误:', error)
+          loading.value = false
+          ElMessage.error('语音翻译服务异常')
+        }
+      )
     }
   } catch (err: any) {
     console.error('翻译错误:', err)
@@ -438,8 +445,140 @@ function handleImageChange(file: any) {
 /**
  * 音频选择变化
  */
-function handleAudioChange(file: any) {
+async function handleAudioChange(file: any) {
   audioFile.value = file.raw
+}
+
+async function translateAudioStream(
+  file: File,
+  from: string,
+  to: string,
+  onAsr: (recognizedText: string) => void,
+  onChunk: (text: string) => void,
+  onDone: (result: { recognizedText: string; translatedText: string; totalDuration: number }) => void,
+  onError: (error: Error) => void
+) {
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('from', from)
+    formData.append('to', to)
+
+    const response = await fetch(`${API_BASE}/translate/audio/stream`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应流')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let currentEvent = ''
+    let currentData = ''
+    let fullTranslation = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        
+        if (line === '') {
+          if (currentEvent && currentData) {
+            if (currentEvent === 'asr') {
+              try {
+                const data = JSON.parse(currentData)
+                if (data.recognizedText) {
+                  onAsr(data.recognizedText)
+                }
+              } catch (e) {
+                console.warn('解析ASR结果失败:', e)
+              }
+            } else if (currentEvent === 'translation') {
+              try {
+                const data = JSON.parse(currentData)
+                if (data.text) {
+                  fullTranslation += data.text
+                  onChunk(fullTranslation)
+                }
+              } catch (e) {
+                console.warn('解析翻译块失败:', e)
+              }
+            } else if (currentEvent === 'done') {
+              try {
+                const data = JSON.parse(currentData)
+                onDone({
+                  recognizedText: data.recognizedText,
+                  translatedText: data.translatedText,
+                  totalDuration: data.totalDuration,
+                })
+              } catch (e) {
+                console.warn('解析完成数据失败:', e)
+              }
+              return
+            }
+          }
+          currentEvent = ''
+          currentData = ''
+          continue
+        }
+
+        if (line.startsWith('event:')) {
+          currentEvent = line.substring(6).trim()
+        } else if (line.startsWith('data:')) {
+          currentData = line.substring(5).trim()
+        }
+      }
+    }
+
+    if (currentEvent && currentData) {
+      if (currentEvent === 'asr') {
+        try {
+          const data = JSON.parse(currentData)
+          if (data.recognizedText) {
+            onAsr(data.recognizedText)
+          }
+        } catch (e) {
+          console.warn('解析ASR结果失败:', e)
+        }
+      } else if (currentEvent === 'translation') {
+        try {
+          const data = JSON.parse(currentData)
+          if (data.text) {
+            fullTranslation += data.text
+            onChunk(fullTranslation)
+          }
+        } catch (e) {
+          console.warn('解析翻译块失败:', e)
+        }
+      } else if (currentEvent === 'done') {
+        try {
+          const data = JSON.parse(currentData)
+          onDone({
+            recognizedText: data.recognizedText,
+            translatedText: data.translatedText,
+            totalDuration: data.totalDuration,
+          })
+        } catch (e) {
+          console.warn('解析完成数据失败:', e)
+        }
+      }
+    }
+  } catch (error) {
+    onError(error as Error)
+  }
 }
 </script>
 
@@ -473,7 +612,7 @@ function handleAudioChange(file: any) {
             :rows="6"
             placeholder="请输入要翻译的内容"
             resize="vertical"
-            maxlength="10000"
+            maxlength="50000"
             show-word-limit
           />
         </el-tab-pane>
@@ -616,6 +755,8 @@ function handleAudioChange(file: any) {
             </div>
           </div>
         </template>
+        <p v-if="activeTab === 'audio' && recognizedText" class="recognized-text-label">识别文本</p>
+        <p v-if="activeTab === 'audio' && recognizedText" class="recognized-text">{{ recognizedText }}</p>
         <p class="result-text">{{ resultText }}</p>
       </el-card>
     </main>
@@ -760,6 +901,25 @@ function handleAudioChange(file: any) {
   color: #303133;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.recognized-text-label {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+}
+
+.recognized-text {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #909399;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
 }
 
 /* 响应式适配 */

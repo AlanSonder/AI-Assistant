@@ -22,7 +22,7 @@ ai:
     topP: ${LLM_TOP_P:0.9}
     max-tokens: ${LLM_MAX_TOKENS:4096}
   translator:
-    max-text-length: 10000
+    max-text-length: 50000
     max-segment-length: 3000
     enable-cache: true
     cache-size: 10000

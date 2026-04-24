@@ -123,6 +123,14 @@ public class TranslateController {
         return ApiResponse.success(response);
     }
 
+    @PostMapping(value = "/audio/stream", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter translateAudioStream(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("from") String from,
+            @RequestParam("to") String to) {
+        return audioTranslateService.translateAudioStream(file, from, to, objectMapper);
+    }
+
     private String buildUserPrompt(String text, String context) {
         if (context != null && !context.trim().isEmpty()) {
             return String.format("""

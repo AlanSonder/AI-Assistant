@@ -8,7 +8,7 @@ import lombok.Data;
 public class TranslateRequest {
 
     @NotBlank(message = "翻译文本不能为空")
-    @Size(max = 10000, message = "文本长度不能超过10000字符")
+    @Size(max = 50000, message = "文本长度不能超过50000字符")
     private String text;
 
     @NotBlank(message = "源语言不能为空")

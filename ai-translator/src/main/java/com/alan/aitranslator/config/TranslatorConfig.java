@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "ai.translator")
 public class TranslatorConfig {
 
-    private int maxTextLength = 10000;
+    private int maxTextLength = 50000;
 
     private int maxSegmentLength = 3000;
 
