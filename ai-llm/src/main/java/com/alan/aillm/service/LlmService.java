@@ -3,17 +3,13 @@ package com.alan.aillm.service;
 import com.alan.aicommon.exception.LlmException;
 import com.alan.aillm.config.LlmConfig;
 import com.alan.aillm.dto.request.ChatRequest;
-import com.alan.aillm.dto.response.ChatResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
-import org.springframework.retry.annotation.Backoff;
-import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 
 import jakarta.annotation.PostConstruct;
@@ -35,10 +31,13 @@ public class LlmService {
         webClient = WebClient.builder()
                 .baseUrl(llmConfig.getBaseUrl())
                 .defaultHeader("Content-Type", "application/json")
-                .defaultHeader("Accept", "text/event-stream")
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(10 * 1024 * 1024))
                 .build();
     }
 
+    // ==========================
+    // ✅ 同步调用（非流式）
+    // ==========================
     public String chat(String systemPrompt, String userPrompt) {
         List<ChatRequest.Message> messages = new ArrayList<>();
         messages.add(ChatRequest.Message.system(systemPrompt));
@@ -47,113 +46,36 @@ public class LlmService {
     }
 
     public String chat(List<ChatRequest.Message> messages) {
-        ChatRequest request = buildRequest(messages);
+        ChatRequest request = buildRequest(messages, false); // ❗关闭 stream
 
-        log.debug("LLM请求: model={}, messages={}", llmConfig.getModel(), messages.size());
-
-        return callStreamApi(request);
-    }
-
-    private ChatRequest buildRequest(List<ChatRequest.Message> messages) {
-        ChatRequest request = new ChatRequest();
-        request.setModel(llmConfig.getModel());
-        request.setMessages(messages);
-        request.setTemperature(llmConfig.getTemperature());
-        request.setTopP(llmConfig.getTopP());
-        request.setMaxTokens(llmConfig.getMaxTokens());
-        request.setStream(true);
-        return request;
-    }
-
-    @Retryable(
-            value = {WebClientResponseException.class, RuntimeException.class},
-            maxAttemptsExpression = "${ai.llm.max-retries:3}",
-            backoff = @Backoff(delay = 1000, multiplier = 2)
-    )
-    private String callStreamApi(ChatRequest request) {
-        String url = "/chat/completions";
-
-        long startTime = System.currentTimeMillis();
         try {
-            log.info("发送流式LLM请求...");
-            String responseBody = webClient.post()
-                    .uri(url)
-                    .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
-                            ? "Bearer " + llmConfig.getApiKey() : null)
-                    .accept(MediaType.TEXT_EVENT_STREAM)
+            String response = webClient.post()
+                    .uri("/chat/completions")
+                    .header("Authorization", buildAuth())
                     .bodyValue(request)
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
 
-            long duration = System.currentTimeMillis() - startTime;
-            log.info("LLM响应成功: duration={}ms, model={}", duration, llmConfig.getModel());
+            return parseNormalResponse(response);
 
-            if (responseBody == null || responseBody.isEmpty()) {
-                throw new LlmException("LLM返回响应体为空");
-            }
-
-            return parseStreamResponse(responseBody);
-        } catch (WebClientResponseException e) {
-            log.error("LLM服务器错误: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
-            throw new LlmException("LLM服务器错误: " + e.getStatusCode() + ", " + e.getResponseBodyAsString(), e);
         } catch (Exception e) {
-            log.error("LLM调用失败: error={}", e.getMessage(), e);
             throw new LlmException("LLM调用失败: " + e.getMessage(), e);
         }
     }
 
-    private String parseStreamResponse(String responseBody) {
-        StringBuilder content = new StringBuilder();
-        String[] lines = responseBody.split("\n");
-        
-        for (String line : lines) {
-            line = line.trim();
-            if (line.isEmpty() || !line.startsWith("data:")) {
-                continue;
-            }
-            
-            String data = line.substring(5).trim();
-            if (data.equals("[DONE]")) {
-                break;
-            }
-            
-            try {
-                JsonNode jsonNode = objectMapper.readTree(data);
-                JsonNode choices = jsonNode.get("choices");
-                if (choices != null && choices.isArray() && choices.size() > 0) {
-                    JsonNode delta = choices.get(0).get("delta");
-                    if (delta != null) {
-                        JsonNode contentNode = delta.get("content");
-                        if (contentNode != null && !contentNode.isNull()) {
-                            content.append(contentNode.asText());
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("解析流式响应行失败: {}", e.getMessage());
-            }
+    private String parseNormalResponse(String body) {
+        try {
+            JsonNode json = objectMapper.readTree(body);
+            return json.get("choices").get(0).get("message").get("content").asText();
+        } catch (Exception e) {
+            throw new LlmException("解析响应失败", e);
         }
-        
-        String result = content.toString().trim();
-        if (result.isEmpty()) {
-            throw new LlmException("LLM返回消息内容为空字符串");
-        }
-        
-        log.info("提取内容成功: 长度={}", result.length());
-        return result;
     }
 
-    public String chatWithHistory(String systemPrompt, String userPrompt, List<ChatRequest.Message> history) {
-        List<ChatRequest.Message> messages = new ArrayList<>();
-        messages.add(ChatRequest.Message.system(systemPrompt));
-        if (history != null) {
-            messages.addAll(history);
-        }
-        messages.add(ChatRequest.Message.user(userPrompt));
-        return chat(messages);
-    }
-
+    // ==========================
+    // ✅ 流式调用（真正流）
+    // ==========================
     public Flux<String> chatStream(String systemPrompt, String userPrompt) {
         List<ChatRequest.Message> messages = new ArrayList<>();
         messages.add(ChatRequest.Message.system(systemPrompt));
@@ -162,41 +84,81 @@ public class LlmService {
     }
 
     public Flux<String> chatStream(List<ChatRequest.Message> messages) {
-        ChatRequest request = buildRequest(messages);
-        log.debug("LLM流式请求: model={}, messages={}", llmConfig.getModel(), messages.size());
-        return callStreamApiFlux(request);
-    }
+        ChatRequest request = buildRequest(messages, true);
 
-    private Flux<String> callStreamApiFlux(ChatRequest request) {
-        String url = "/chat/completions";
         return webClient.post()
-                .uri(url)
-                .header("Authorization", llmConfig.getApiKey() != null && !llmConfig.getApiKey().isEmpty() 
-                        ? "Bearer " + llmConfig.getApiKey() : null)
+                .uri("/chat/completions")
+                .header("Authorization", buildAuth())
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(request)
                 .retrieve()
                 .bodyToFlux(String.class)
-                .filter(line -> !line.trim().isEmpty() && line.startsWith("data:"))
+
+                // 拆行
+                .flatMap(chunk -> Flux.fromArray(chunk.split("\n")))
+
+                // 过滤
+                .map(String::trim)
+                .filter(line -> line.startsWith("data:"))
+
+                // 去掉前缀
                 .map(line -> line.substring(5).trim())
                 .filter(data -> !data.equals("[DONE]"))
-                .flatMap(data -> {
-                    try {
-                        JsonNode jsonNode = objectMapper.readTree(data);
-                        JsonNode choices = jsonNode.get("choices");
-                        if (choices != null && choices.isArray() && choices.size() > 0) {
-                            JsonNode delta = choices.get(0).get("delta");
-                            if (delta != null) {
-                                JsonNode contentNode = delta.get("content");
-                                if (contentNode != null && !contentNode.isNull()) {
-                                    return Flux.just(contentNode.asText());
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.warn("解析流式响应行失败: {}", e.getMessage());
-                    }
+
+                // 解析 JSON
+                .flatMap(this::parseStreamLine)
+
+                // 防止异常中断流
+                .onErrorResume(e -> {
+                    log.error("流式解析异常", e);
                     return Flux.empty();
                 });
+    }
+
+    private Flux<String> parseStreamLine(String data) {
+        try {
+            JsonNode json = objectMapper.readTree(data);
+            JsonNode delta = json.get("choices").get(0).get("delta");
+
+            if (delta != null) {
+
+                // content
+                JsonNode content = delta.get("content");
+                if (content != null && !content.isNull()) {
+                    return Flux.just(content.asText());
+                }
+
+                // reasoning（可选）
+                JsonNode reasoning = delta.get("reasoning");
+                if (reasoning != null && !reasoning.isNull()) {
+                    return Flux.just(reasoning.asText());
+                }
+            }
+
+        } catch (Exception e) {
+            log.warn("解析失败: {}", data);
+        }
+        return Flux.empty();
+    }
+
+    // ==========================
+    // 工具方法
+    // ==========================
+    private ChatRequest buildRequest(List<ChatRequest.Message> messages, boolean stream) {
+        ChatRequest request = new ChatRequest();
+        request.setModel(llmConfig.getModel());
+        request.setMessages(messages);
+        request.setTemperature(llmConfig.getTemperature());
+        request.setTopP(llmConfig.getTopP());
+        request.setMaxTokens(llmConfig.getMaxTokens());
+        request.setStream(stream);
+        return request;
+    }
+
+    private String buildAuth() {
+        if (llmConfig.getApiKey() == null || llmConfig.getApiKey().isEmpty()) {
+            return null;
+        }
+        return "Bearer " + llmConfig.getApiKey();
     }
 }
