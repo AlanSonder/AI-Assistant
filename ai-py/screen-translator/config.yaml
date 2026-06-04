@@ -13,7 +13,7 @@ llm:
   providers:
     deepseek:
       base_url: "https://api.deepseek.com"
-      api_key: "sk-2ce14ae2234947709419a377083cb91b"
+      api_key: ""
       models:
         - deepseek-v4-pro
         - deepseek-v4-flash
