@@ -29,7 +29,7 @@ ai:
           - llama
       deepseek:
         base-url: ${LLM_DEEPSEEK_URL:https://api.deepseek.com}
-        api-key: ${LLM_DEEPSEEK_KEY:sk-2ce14ae2234947709419a377083cb91b}
+        api-key: ${LLM_DEEPSEEK_KEY:}
         models:
           - deepseek-v4-pro
           - deepseek-v4-flash
