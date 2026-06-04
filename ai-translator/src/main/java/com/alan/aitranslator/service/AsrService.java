@@ -24,7 +24,7 @@ public class AsrService {
     private final String asrApiUrl;
 
     public AsrService(LlmConfig llmConfig, TranslatorConfig translatorConfig) {
-        String baseUrl = llmConfig.getBaseUrl();
+        String baseUrl = llmConfig.getActiveProviderConfig().getBaseUrl();
         if (baseUrl == null || baseUrl.isEmpty()) {
             throw new IllegalArgumentException("LLM baseUrl configuration is required");
         }

@@ -13,14 +13,31 @@ spring:
 
 ai:
   llm:
-    base-url: ${LLM_BASE_URL:http://localhost:1234/v1}
-    model: ${LLM_MODEL:qwen}
-    api-key: ${LLM_API_KEY:sk-lm-zmU7SpEW:2wED8QUaU6JFaPKTbs6t}
+    active-provider: ${LLM_ACTIVE_PROVIDER:local}
+    default-model: ${LLM_DEFAULT_MODEL:qwen}
     timeout: ${LLM_TIMEOUT:60000}
     max-retries: ${LLM_MAX_RETRIES:3}
     temperature: ${LLM_TEMPERATURE:0.3}
-    topP: ${LLM_TOP_P:0.9}
+    top-p: ${LLM_TOP_P:0.9}
     max-tokens: ${LLM_MAX_TOKENS:4096}
+    providers:
+      local:
+        base-url: ${LLM_LOCAL_URL:http://localhost:1234/v1}
+        api-key: ${LLM_LOCAL_KEY:sk-lm-local}
+        models:
+          - qwen
+          - llama
+      deepseek:
+        base-url: ${LLM_DEEPSEEK_URL:https://api.deepseek.com}
+        api-key: ${LLM_DEEPSEEK_KEY:sk-2ce14ae2234947709419a377083cb91b}
+        models:
+          - deepseek-v4-pro
+          - deepseek-v4-flash
+        vision-enabled: false
+        thinking:
+          enabled: ${LLM_DEEPSEEK_THINKING:false}
+        reasoning-effort: ${LLM_DEEPSEEK_REASONING:high}
+
   translator:
     max-text-length: 50000
     max-segment-length: 3000
@@ -32,3 +49,4 @@ ai:
 
 server:
   port: 9090
+

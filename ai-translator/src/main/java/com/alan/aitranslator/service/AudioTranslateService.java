@@ -2,8 +2,6 @@ package com.alan.aitranslator.service;
 
 import com.alan.aicommon.exception.TranslationException;
 import com.alan.aillm.service.LlmService;
-import com.alan.aitranslator.dto.request.TranslateRequest;
-import com.alan.aitranslator.dto.response.AudioTranslateResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,75 +23,11 @@ public class AudioTranslateService {
 
     private final AsrService asrService;
 
-    private final TranslateService translateService;
-
     private final LlmService llmService;
 
-    public AudioTranslateService(AsrService asrService, TranslateService translateService, LlmService llmService) {
+    public AudioTranslateService(AsrService asrService, LlmService llmService) {
         this.asrService = asrService;
-        this.translateService = translateService;
         this.llmService = llmService;
-    }
-
-    public AudioTranslateResponse translateAudio(MultipartFile audioFile, String from, String to) {
-        long startTime = System.currentTimeMillis();
-
-        validateAudio(audioFile);
-
-        log.info("语音翻译请求: from={}, to={}, size={}", from, to, audioFile.getSize());
-
-        Path tempFile = null;
-        try {
-            tempFile = Files.createTempFile("audio_", getFileExtension(audioFile.getOriginalFilename()));
-            audioFile.transferTo(tempFile.toFile());
-
-            long audioDuration = getAudioDurationMs(tempFile.toFile());
-
-            String recognizedText;
-            try {
-                recognizedText = asrService.recognize(tempFile.toFile(), from);
-            } catch (Exception e) {
-                log.error("语音识别失败", e);
-                throw new TranslationException("语音识别失败: " + e.getMessage());
-            }
-
-            if (recognizedText == null || recognizedText.trim().isEmpty()) {
-                throw new TranslationException("语音中未识别到任何文字内容");
-            }
-
-            log.info("语音识别成功: 文字长度={}", recognizedText.length());
-
-            TranslateRequest translateRequest = new TranslateRequest();
-            translateRequest.setText(recognizedText);
-            translateRequest.setFrom(from);
-            translateRequest.setTo(to);
-
-            var translateResult = translateService.translate(translateRequest);
-
-            long duration = System.currentTimeMillis() - startTime;
-
-            return AudioTranslateResponse.builder()
-                    .recognizedText(recognizedText)
-                    .translatedText(translateResult.getTranslatedText())
-                    .from(from)
-                    .to(to)
-                    .durationMs(duration)
-                    .audioDurationMs(audioDuration)
-                    .build();
-        } catch (TranslationException e) {
-            throw e;
-        } catch (IOException e) {
-            log.error("处理音频文件失败", e);
-            throw new TranslationException("处理音频文件失败: " + e.getMessage());
-        } finally {
-            if (tempFile != null) {
-                try {
-                    Files.deleteIfExists(tempFile);
-                } catch (IOException e) {
-                    log.warn("清理临时文件失败: {}", tempFile);
-                }
-            }
-        }
     }
 
     public SseEmitter translateAudioStream(MultipartFile audioFile, String from, String to, ObjectMapper objectMapper) {

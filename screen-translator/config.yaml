@@ -1,0 +1,55 @@
+# Screen Translator 配置文件
+
+# 后端 API 地址
+backend:
+  url: "http://localhost:9090"
+
+# LLM 提供商配置（直接调用 API，无需后端）
+# 可用提供商: local / deepseek
+llm:
+  active_provider: "deepseek"
+  default_model: "deepseek-v4-flash"
+  thinking_enabled: false
+  providers:
+    deepseek:
+      base_url: "https://api.deepseek.com"
+      api_key: "sk-2ce14ae2234947709419a377083cb91b"
+      models:
+        - deepseek-v4-pro
+        - deepseek-v4-flash
+      vision_enabled: false
+      reasoning_effort: "high"
+      thinking_enabled: false
+    local:
+      base_url: "http://localhost:1234/v1"
+      api_key: "lm-studio"
+      models:
+        - qwen
+        - llama
+      vision_enabled: true
+
+# OCR 配置（本地 OCR 引擎，解决 DeepSeek 等不支持 Vision 的问题）
+# engine: tesseract（Tesseract 5，速度快，默认）/ paddle（PaddleOCR，精度高）
+ocr:
+  engine: "tesseract"
+  # 识别语言: ch（中英混合，推荐）/ en / ja / ko
+  lang: "ch"
+  # 识别置信度阈值，低于此值的结果将被过滤
+  confidence_threshold: 0.5
+
+# 截图保存
+capture:
+  save_dir: "./captures"
+
+# 翻译语言
+translate:
+  from: "Japanese"
+  to: "Chinese"
+
+# 覆盖层字体设置
+font:
+  family: "Microsoft YaHei"
+  size: 13
+
+# 全局热键
+hotkey: "ctrl+Q"

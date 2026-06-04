@@ -1,10 +1,13 @@
 package com.alan.aillm.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class ChatRequest {
     private String model;
     private List<Message> messages;
@@ -12,8 +15,13 @@ public class ChatRequest {
     private double topP;
     private int maxTokens;
     private boolean stream;
+    /** DeepSeek 思考模式（仅 deepseek 提供商，序列化为 {"type": "enabled"}） */
+    private Map<String, String> thinking;
+    /** DeepSeek 推理深度（仅 deepseek 提供商，如 "high"） */
+    private String reasoningEffort;
 
     @Data
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Message {
         private String role;
         private String content;
@@ -41,6 +49,7 @@ public class ChatRequest {
     }
 
     @Data
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class VisionMessage {
         private String role;
         private List<Content> content;
@@ -57,6 +66,7 @@ public class ChatRequest {
     }
 
     @Data
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Content {
         private String type;
         private String text;
@@ -78,6 +88,7 @@ public class ChatRequest {
     }
 
     @Data
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ImageUrl {
         private String url;
 

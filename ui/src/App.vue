@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { DocumentCopy, Delete, MagicStick, CircleCheck, UploadFilled } from '@element-plus/icons-vue'
-import axios from 'axios'
+import { DocumentCopy, Delete, MagicStick, UploadFilled } from '@element-plus/icons-vue'
+import LlmSelector from './components/LlmSelector.vue'
 
 // ==================== 类型定义 ====================
 
@@ -15,33 +15,15 @@ interface TranslateRequest {
   contextText?: string
 }
 
-interface ApiResponse<T> {
-  code: number
-  message: string
-  data: T
-  timestamp: number
-}
-
-interface TranslateResult {
-  originalText: string
-  translatedText: string
-  from: string
-  to: string
-  domain: string
-  style: string
-  durationMs: number
-  cached: boolean
-}
-
 // ==================== 常量 ====================
 
 const API_BASE = '/api/v1'
 
 const LANGUAGE_OPTIONS = [
   { label: '自动检测', value: 'auto' },
-  { label: '中文', value: 'zh' },
-  { label: '英文', value: 'en' },
-  { label: '日文', value: 'ja' },
+  { label: '中文', value: 'Chinese' },
+  { label: '英文', value: 'English' },
+  { label: '日文', value: 'Japanese' },
 ]
 
 const DOMAIN_OPTIONS = [
@@ -64,7 +46,7 @@ const STYLE_OPTIONS = [
 
 const inputText = ref('')
 const fromLang = ref('auto')
-const toLang = ref('zh')
+const toLang = ref('Chinese')
 const domain = ref('general')
 const style = ref('neutral')
 const resultText = ref('')
@@ -80,19 +62,6 @@ const recognizedText = ref('')
 const activeTab = ref('text')
 
 // ==================== API 封装 ====================
-
-const api = axios.create({
-  baseURL: API_BASE,
-  timeout: 120000,
-})
-
-/**
- * 文本翻译（非流式）
- */
-async function translateTextApi(params: TranslateRequest): Promise<ApiResponse<TranslateResult>> {
-  const { data } = await api.post<ApiResponse<TranslateResult>>('/translate/text', params)
-  return data
-}
 
 /**
  * 文本翻译（流式）
@@ -591,11 +560,8 @@ async function translateAudioStream(
           <el-icon size="28" color="#409EFF"><MagicStick /></el-icon>
           <span>AI 翻译助手</span>
         </h1>
-        <div class="status">
-          <el-tag type="success" effect="light" size="small">
-            <el-icon><CircleCheck /></el-icon>
-            LM Studio 已连接
-          </el-tag>
+        <div class="header-right">
+          <LlmSelector />
         </div>
       </div>
     </header>
@@ -796,7 +762,7 @@ async function translateAudioStream(
   gap: 10px;
 }
 
-.status {
+.header-right {
   display: flex;
   align-items: center;
 }

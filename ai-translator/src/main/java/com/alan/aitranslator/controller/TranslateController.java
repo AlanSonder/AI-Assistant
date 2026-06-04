@@ -1,14 +1,9 @@
 package com.alan.aitranslator.controller;
 
-import com.alan.aicommon.dto.ApiResponse;
 import com.alan.aillm.service.LlmService;
 import com.alan.aitranslator.dto.request.TranslateRequest;
-import com.alan.aitranslator.dto.response.AudioTranslateResponse;
-import com.alan.aitranslator.dto.response.ImageTranslateResponse;
-import com.alan.aitranslator.dto.response.TranslateResponse;
 import com.alan.aitranslator.service.AudioTranslateService;
 import com.alan.aitranslator.service.ImageTranslateService;
-import com.alan.aitranslator.service.TranslateService;
 import com.alan.aitranslator.util.TextPreprocessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
@@ -30,9 +25,6 @@ import java.util.concurrent.CompletableFuture;
 public class TranslateController {
 
     @Autowired
-    private TranslateService translateService;
-
-    @Autowired
     private ImageTranslateService imageTranslateService;
 
     @Autowired
@@ -42,12 +34,6 @@ public class TranslateController {
     private LlmService llmService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    @PostMapping("/text")
-    public ApiResponse<TranslateResponse> translateText(@Valid @RequestBody TranslateRequest request) {
-        TranslateResponse response = translateService.translate(request);
-        return ApiResponse.success(response);
-    }
 
     @PostMapping(value = "/text/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter translateTextStream(@Valid @RequestBody TranslateRequest request) {
@@ -103,24 +89,6 @@ public class TranslateController {
             @RequestParam("from") String from,
             @RequestParam("to") String to) {
         return imageTranslateService.translateImageStream(file, from, to);
-    }
-
-    @PostMapping(value = "/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<ImageTranslateResponse> translateImage(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("from") String from,
-            @RequestParam("to") String to) {
-        ImageTranslateResponse response = imageTranslateService.translateImage(file, from, to);
-        return ApiResponse.success(response);
-    }
-
-    @PostMapping(value = "/audio", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<AudioTranslateResponse> translateAudio(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("from") String from,
-            @RequestParam("to") String to) {
-        AudioTranslateResponse response = audioTranslateService.translateAudio(file, from, to);
-        return ApiResponse.success(response);
     }
 
     @PostMapping(value = "/audio/stream", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
