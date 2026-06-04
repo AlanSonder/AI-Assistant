@@ -1,4 +1,4 @@
-# screen-translator 依赖
+# ai-voice-assistant 依赖
 # 注意: 统一由根目录 requirements.txt 管理，此文件仅作为独立安装备选
 # 推荐使用: cd .. && pip install -r requirements.txt
 

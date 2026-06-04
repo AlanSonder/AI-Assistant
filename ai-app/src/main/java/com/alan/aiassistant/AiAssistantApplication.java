@@ -15,7 +15,7 @@ import org.springframework.retry.annotation.EnableRetry;
         org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration.class
 })
 @EnableRetry
-@ComponentScan(basePackages = {"com.alan.aiassistant", "com.alan.aicommon", "com.alan.aitranslator", "com.alan.aillm", "com.alan.aiocr", "com.alan.aiagent"})
+@ComponentScan(basePackages = {"com.alan.aiassistant", "com.alan.aicommon", "com.alan.aitranslator", "com.alan.aillm", "com.alan.aiagent"})
 public class AiAssistantApplication {
 
     public static void main(String[] args) {

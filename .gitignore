@@ -78,6 +78,12 @@ $RECYCLE.BIN/
 .env.local
 .env.*.local
 
+### Python ###
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
 ### Temporary files ###
 *.tmp
 *.temp

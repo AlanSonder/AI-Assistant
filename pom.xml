@@ -28,7 +28,7 @@
         <url/>
     </scm>
     <properties>
-        <java.version>17</java.version>
+        <java.version>21</java.version>
         <spring-ai.version>1.1.4</spring-ai.version>
     </properties>
     <dependencyManagement>
@@ -46,7 +46,6 @@
     <modules>
         <module>ai-common</module>
         <module>ai-llm</module>
-        <module>ai-ocr</module>
         <module>ai-translator</module>
         <module>ai-agent</module>
         <module>ai-app</module>
@@ -54,6 +53,25 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-toolchains-plugin</artifactId>
+                <version>3.2.0</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>toolchain</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <toolchains>
+                        <jdk>
+                            <version>21</version>
+                        </jdk>
+                    </toolchains>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

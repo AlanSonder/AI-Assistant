@@ -53,12 +53,6 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- 依赖OCR模块 -->
-        <dependency>
-            <groupId>com.alan</groupId>
-            <artifactId>ai-ocr</artifactId>
-            <version>${project.version}</version>
-        </dependency>
 
         <!-- 依赖翻译模块 -->
         <dependency>

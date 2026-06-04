@@ -1,0 +1,56 @@
+# Voice Assistant 配置文件
+
+# 唤醒词配置
+wake_word:
+  # 内置唤醒词模型: hey_jarvis, alexa, timer, weather 等
+  # 详见 openwakeword 文档
+  model: "hey_jarvis"
+  # 检测阈值 (0~1)，越高越严格，越不容易误触发
+  threshold: 0.5
+
+# 音频采集配置
+audio:
+  sample_rate: 16000
+  channels: 1
+  # VAD 静音检测时长（秒），超过此时间无语音则判定说完
+  silence_threshold: 1.5
+  # 单次录音最大时长（秒）
+  max_record_seconds: 30
+
+# 语音识别配置 (faster-whisper)
+asr:
+  # 模型大小: tiny / base / small / medium / large-v3
+  model_size: "medium"
+  # 设备: cpu / cuda
+  device: "cpu"
+  # 计算精度: int8 / float16 / float32
+  compute_type: "int8"
+  # 识别语言: zh / en / ja 等，留空自动检测
+  language: "zh"
+
+# LLM 配置
+llm:
+  active_provider: "deepseek"
+  providers:
+    deepseek:
+      base_url: "https://api.deepseek.com"
+      api_key: "sk-2ce14ae2234947709419a377083cb91b"
+      model: "deepseek-v4-flash"
+    local:
+      base_url: "http://localhost:1234/v1"
+      api_key: "lm-studio"
+      model: "qwen"
+
+# TTS 配置 (edge-tts)
+tts:
+  # 中文语音: zh-CN-XiaoxiaoNeural / zh-CN-YunxiNeural / zh-CN-YunjianNeural
+  voice: "zh-CN-XiaoxiaoNeural"
+  # 语速调整: +0% / +10% / -10% 等
+  rate: "+0%"
+  # 音量调整: +0% / +10% / -10% 等
+  volume: "+0%"
+
+# 系统提示词
+system_prompt: |
+  你是一个智能语音助手，请用简洁自然的中文回答用户的问题。
+  回答尽量简短，适合语音播报，避免使用 Markdown 格式。

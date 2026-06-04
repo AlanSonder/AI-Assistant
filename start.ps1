@@ -9,6 +9,9 @@
 #   stop-frontend  - 仅停止前端
 #   restart-backend  - 仅重启后端
 #   restart-frontend - 仅重启前端
+#   start-translator - 启动屏幕翻译工具
+#   start-voice    - 启动语音助手
+#   setup-python   - 创建/更新 Python 虚拟环境
 #   status         - 查看运行状态
 #   log-backend    - 查看后端日志
 #   log-frontend   - 查看前端日志
@@ -29,6 +32,17 @@ $FrontendPort = 5173
 $BackendLog = "$ProjectRoot\.logs\backend.log"
 $FrontendLog = "$ProjectRoot\.logs\frontend.log"
 $JvmArgs = "-Dsun.java2d.uiScale=1.0"
+$VenvDir = "$ProjectRoot\ai-py\.venv"
+$PythonExe = "$VenvDir\Scripts\python.exe"
+$ActivateScript = "$VenvDir\Scripts\Activate.ps1"
+$RequirementsFile = "$ProjectRoot\ai-py\requirements.txt"
+
+# 项目专用 JAVA_HOME（JDK 21，不影响全局）
+$ProjectJavaHome = "C:\Users\alans\scoop\apps\temurin21-jdk\current"
+if (Test-Path $ProjectJavaHome) {
+    $env:JAVA_HOME = $ProjectJavaHome
+    $env:PATH = "$ProjectJavaHome\bin;$env:PATH"
+}
 
 # 确保日志目录存在
 New-Item -ItemType Directory -Path "$ProjectRoot\.logs" -Force | Out-Null
@@ -69,6 +83,59 @@ function Is-FrontendRunning {
     return $null -ne (Get-ProcessByPort -Port $FrontendPort)
 }
 
+function Test-PythonVenvExists {
+    return (Test-Path $PythonExe)
+}
+
+# ======================== Python 工具 ========================
+
+function Setup-Python {
+    Write-Host "  [Python] 正在设置虚拟环境..." -ForegroundColor Cyan
+
+    if (Test-PythonVenvExists) {
+        Write-Host "  [Python] 虚拟环境已存在，跳过创建" -ForegroundColor Yellow
+    } else {
+        python -m venv $VenvDir 2>&1 | Out-Null
+        if (-not (Test-PythonVenvExists)) {
+            Write-Host "  [Python] 创建失败，请确保已安装 Python 3.11+" -ForegroundColor Red
+            return
+        }
+        Write-Host "  [Python] 虚拟环境创建成功" -ForegroundColor Green
+    }
+
+    Write-Host "  [Python] 正在安装依赖 (可能需要几分钟)..." -ForegroundColor Cyan
+    & "$VenvDir\Scripts\pip.exe" install --upgrade pip -q 2>&1 | Out-Null
+    & "$VenvDir\Scripts\pip.exe" install -r $RequirementsFile 2>&1 | ForEach-Object {
+        if ($_ -match "Successfully") { Write-Host "  $_" -ForegroundColor Green }
+        elseif ($_ -match "ERROR|error") { Write-Host "  $_" -ForegroundColor Red }
+    }
+    Write-Host "  [Python] 设置完成" -ForegroundColor Green
+}
+
+function Start-Translator {
+    if (-not (Test-PythonVenvExists)) {
+        Write-Host "  [Translator] 虚拟环境不存在，请先运行 setup-python" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "  [Translator] 正在启动屏幕翻译工具..." -ForegroundColor Cyan
+    $cmd = "& '$ActivateScript'; cd '$ProjectRoot\ai-py\screen-translator'; `$Host.UI.RawUI.WindowTitle='Screen Translator'; python main.py"
+    Start-Process pwsh -ArgumentList "-NoExit", "-Command", $cmd -WorkingDirectory "$ProjectRoot\ai-py\screen-translator"
+    Write-Host "  [Translator] 已在新窗口启动" -ForegroundColor Green
+}
+
+function Start-VoiceAssistant {
+    if (-not (Test-PythonVenvExists)) {
+        Write-Host "  [Voice] 虚拟环境不存在，请先运行 setup-python" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "  [Voice] 正在启动语音助手..." -ForegroundColor Cyan
+    $cmd = "& '$ActivateScript'; cd '$ProjectRoot\ai-py\ai-voice-assistant'; `$Host.UI.RawUI.WindowTitle='Voice Assistant'; python main.py"
+    Start-Process pwsh -ArgumentList "-NoExit", "-Command", $cmd -WorkingDirectory "$ProjectRoot\ai-py\ai-voice-assistant"
+    Write-Host "  [Voice] 已在新窗口启动" -ForegroundColor Green
+}
+
 # ======================== 启动 ========================
 
 function Start-Backend {
@@ -86,7 +153,8 @@ function Start-Backend {
 
     # 在新终端窗口中启动 Spring Boot
     $mvnwPath = "$ProjectRoot\mvnw.cmd"
-    $cmd = "`$Host.UI.RawUI.WindowTitle='AI-Assistant 后端'; cd '$ProjectRoot'; & '$mvnwPath' spring-boot:run -pl ai-app '-Dspring-boot.run.jvmArguments=$JvmArgs'"
+    $javaSetup = "`$env:JAVA_HOME='$ProjectJavaHome'; `$env:PATH='$ProjectJavaHome\bin;' + `$env:PATH;"
+    $cmd = "$javaSetup `$Host.UI.RawUI.WindowTitle='AI-Assistant 后端'; cd '$ProjectRoot'; & '$mvnwPath' spring-boot:run -pl ai-app '-Dspring-boot.run.jvmArguments=$JvmArgs'"
     Start-Process pwsh -ArgumentList "-NoExit", "-Command", $cmd -WorkingDirectory $ProjectRoot
 
     # 等待启动
@@ -217,6 +285,16 @@ function Show-Status {
     Write-Host "         端口: $BackendPort" -ForegroundColor DarkGray
     Write-Status "前端" (Is-FrontendRunning)
     Write-Host "         端口: $FrontendPort" -ForegroundColor DarkGray
+    Write-Host "  ── Python 工具 ────────────────────────" -ForegroundColor DarkGray
+    if (Test-PythonVenvExists) {
+        $ver = & $PythonExe --version 2>&1
+        $ver = $ver -replace "Python ", ""
+        Write-Status "Python 环境" $true
+        Write-Host "         版本: $ver | 路径: .venv" -ForegroundColor DarkGray
+    } else {
+        Write-Status "Python 环境" $false
+        Write-Host "         运行 setup-python 以创建" -ForegroundColor DarkGray
+    }
     Write-Host "  ─────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
 }
@@ -270,6 +348,11 @@ function Show-Menu {
     Write-Host "   10" -ForegroundColor Yellow -NoNewline; Write-Host "  build            构建后端 (mvn install)"
     Write-Host "   11" -ForegroundColor Yellow -NoNewline; Write-Host "  log-backend      查看后端日志"
     Write-Host "   12" -ForegroundColor Yellow -NoNewline; Write-Host "  log-frontend     查看前端日志"
+    Write-Host ""  -ForegroundColor DarkGray
+    Write-Host "   13" -ForegroundColor Magenta -NoNewline; Write-Host "  setup-python     创建/更新 Python 虚拟环境" -ForegroundColor Magenta
+    Write-Host "   14" -ForegroundColor Magenta -NoNewline; Write-Host "  start-translator 启动屏幕翻译工具" -ForegroundColor Magenta
+    Write-Host "   15" -ForegroundColor Magenta -NoNewline; Write-Host "  start-voice      启动语音助手" -ForegroundColor Magenta
+    Write-Host ""
     Write-Host "    0" -ForegroundColor Yellow -NoNewline; Write-Host "  exit             退出"
     Write-Host ""
 
@@ -288,6 +371,9 @@ function Show-Menu {
             "10" { Build-Backend; break }
             "11" { Show-Log $BackendLog "后端"; break }
             "12" { Show-Log $FrontendLog "前端"; break }
+            "13" { Setup-Python; Show-Status; break }
+            "14" { Start-Translator; break }
+            "15" { Start-VoiceAssistant; break }
             "0" { return }
             default { Write-Host "  无效输入" -ForegroundColor Red }
         }
@@ -362,12 +448,25 @@ switch ($Command.ToLower()) {
     "log-frontend" {
         Show-Log $FrontendLog "前端"
     }
+    "setup-python" {
+        Write-Banner
+        Setup-Python
+        Show-Status
+    }
+    "start-translator" {
+        Write-Banner
+        Start-Translator
+    }
+    "start-voice" {
+        Write-Banner
+        Start-VoiceAssistant
+    }
     "menu" {
         Show-Menu
     }
     default {
         Write-Banner
         Write-Host "  未知命令: $Command" -ForegroundColor Red
-        Write-Host "  用法: .\manage.ps1 [start|stop|restart|start-backend|start-frontend|stop-backend|stop-frontend|restart-backend|restart-frontend|status|build|log-backend|log-frontend|menu]" -ForegroundColor Yellow
+        Write-Host "  用法: .\manage.ps1 [start|stop|restart|start-backend|start-frontend|stop-backend|stop-frontend|restart-backend|restart-frontend|status|build|log-backend|log-frontend|setup-python|start-translator|start-voice|menu]" -ForegroundColor Yellow
     }
 }
